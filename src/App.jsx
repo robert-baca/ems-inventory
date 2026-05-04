@@ -242,105 +242,152 @@ function PackagingSelector({ value, onChange }) {
 }
 
 function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual }) {
-  const barcodeVideoRef = useRef(null);
-  const photoVideoRef   = useRef(null);
+  const barcodeVideoRef  = useRef(null);
+  const photoVideoRef    = useRef(null);
   const barcodeStreamRef = useRef(null);
   const photoStreamRef   = useRef(null);
-  const readerRef        = useRef(null);
-  const [scanMode, setScanMode]       = useState('barcode');
+  const scanLoopRef      = useRef(null);
+  const [scanMode, setScanMode]         = useState('barcode');
   const [barcodeReady, setBarcodeReady] = useState(false);
-  const [photoReady, setPhotoReady]   = useState(false);
-  const [err, setErr]                 = useState(null);
-  const [zxingLoaded, setZxingLoaded] = useState(false);
-  const [lastBarcode, setLastBarcode] = useState(null);
+  const [photoReady, setPhotoReady]     = useState(false);
+  const [err, setErr]                   = useState(null);
+  const [lastBarcode, setLastBarcode]   = useState(null);
+  const [detectorReady, setDetectorReady] = useState(false);
+  const detectorRef = useRef(null);
 
-  // Load ZXing
+  // Set up BarcodeDetector or ZXing fallback
   useEffect(() => {
-    if (window.ZXing) { setZxingLoaded(true); return; }
-    const existing = document.querySelector('script[data-zxing]');
-    if (existing) { existing.addEventListener('load', () => setZxingLoaded(true)); return; }
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js';
-    script.dataset.zxing = 'true';
-    script.onload = () => setZxingLoaded(true);
-    script.onerror = () => { console.warn('ZXing failed to load'); };
-    document.head.appendChild(script);
+    async function setupDetector() {
+      // Try native BarcodeDetector first (Android Chrome, desktop Chrome)
+      if ('BarcodeDetector' in window) {
+        try {
+          const detector = new window.BarcodeDetector({
+            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'itf', 'data_matrix', 'qr_code']
+          });
+          detectorRef.current = detector;
+          setDetectorReady(true);
+          return;
+        } catch (e) { console.warn('BarcodeDetector setup failed:', e); }
+      }
+
+      // Fallback: ZXing
+      if (window.ZXing) { setDetectorReady(true); return; }
+      const existing = document.querySelector('script[data-zxing]');
+      if (existing) { existing.addEventListener('load', () => setDetectorReady(true)); return; }
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js';
+      script.dataset.zxing = 'true';
+      script.onload = () => setDetectorReady(true);
+      script.onerror = () => setDetectorReady(true); // proceed even if ZXing fails
+      document.head.appendChild(script);
+    }
+    setupDetector();
   }, []);
 
-  // Start BOTH streams independently
+  // Start both camera streams
   useEffect(() => {
     let active = true;
-    const constraints = { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } };
+    const constraints = {
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    };
 
-    // Start barcode stream
-    navigator.mediaDevices.getUserMedia(constraints).then(stream => {
-      if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
-      barcodeStreamRef.current = stream;
-      if (barcodeVideoRef.current) {
-        barcodeVideoRef.current.srcObject = stream;
-        barcodeVideoRef.current.play().then(() => setBarcodeReady(true)).catch(() => {});
-      }
-    }).catch(() => setErr('Camera unavailable — check permissions'));
+    navigator.mediaDevices.getUserMedia(constraints)
+      .then(stream => {
+        if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
+        barcodeStreamRef.current = stream;
+        if (barcodeVideoRef.current) {
+          barcodeVideoRef.current.srcObject = stream;
+          barcodeVideoRef.current.play().then(() => setBarcodeReady(true)).catch(() => {});
+        }
+      }).catch(() => setErr('Camera unavailable — check permissions'));
 
-    // Start photo stream
-    navigator.mediaDevices.getUserMedia(constraints).then(stream => {
-      if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
-      photoStreamRef.current = stream;
-      if (photoVideoRef.current) {
-        photoVideoRef.current.srcObject = stream;
-        photoVideoRef.current.play().then(() => setPhotoReady(true)).catch(() => {});
-      }
-    }).catch(() => {});
+    navigator.mediaDevices.getUserMedia(constraints)
+      .then(stream => {
+        if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
+        photoStreamRef.current = stream;
+        if (photoVideoRef.current) {
+          photoVideoRef.current.srcObject = stream;
+          photoVideoRef.current.play().then(() => setPhotoReady(true)).catch(() => {});
+        }
+      }).catch(() => {});
 
     return () => {
       active = false;
+      cancelAnimationFrame(scanLoopRef.current);
       barcodeStreamRef.current?.getTracks().forEach(t => t.stop());
       photoStreamRef.current?.getTracks().forEach(t => t.stop());
-      readerRef.current?.reset?.();
     };
   }, []);
 
-  // Start ZXing on barcode video when ready
+  // Start scan loop when barcode video and detector are ready
   useEffect(() => {
-    if (!barcodeReady || !zxingLoaded || !window.ZXing || !barcodeVideoRef.current) return;
-    try {
-      readerRef.current?.reset?.();
-      const hints = new Map();
-      hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-        window.ZXing.BarcodeFormat.EAN_13, window.ZXing.BarcodeFormat.EAN_8,
-        window.ZXing.BarcodeFormat.CODE_128, window.ZXing.BarcodeFormat.CODE_39,
-        window.ZXing.BarcodeFormat.UPC_A, window.ZXing.BarcodeFormat.UPC_E,
-        window.ZXing.BarcodeFormat.ITF, window.ZXing.BarcodeFormat.DATA_MATRIX,
-      ]);
-      hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
-      const reader = new window.ZXing.BrowserMultiFormatReader(hints, 300);
-      readerRef.current = reader;
-      reader.decodeFromVideoElement(barcodeVideoRef.current, (result) => {
-        if (!result) return;
-        const barcode = result.getText();
-        if (barcode === lastBarcode) return;
-        setLastBarcode(barcode);
-        if (barcodeVideoRef.current) {
-          barcodeVideoRef.current.style.filter = 'brightness(2)';
-          setTimeout(() => { if (barcodeVideoRef.current) barcodeVideoRef.current.style.filter = ''; }, 150);
+    if (!barcodeReady || !detectorReady) return;
+    cancelAnimationFrame(scanLoopRef.current);
+
+    const canvas = document.createElement('canvas');
+    const ctx    = canvas.getContext('2d');
+    let lastCode = null;
+
+    async function scanFrame() {
+      const video = barcodeVideoRef.current;
+      if (!video || video.readyState < 2) {
+        scanLoopRef.current = requestAnimationFrame(scanFrame);
+        return;
+      }
+
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      try {
+        let barcode = null;
+
+        if (detectorRef.current) {
+          // Native BarcodeDetector
+          const results = await detectorRef.current.detect(canvas);
+          if (results.length > 0) barcode = results[0].rawValue;
+        } else if (window.ZXing) {
+          // ZXing fallback — decode from image data
+          try {
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const hints     = new Map();
+            const reader    = new window.ZXing.BrowserMultiFormatReader();
+            const luminance = new window.ZXing.HTMLCanvasElementLuminanceSource(canvas);
+            const binary    = new window.ZXing.HybridBinarizer(luminance);
+            const bmp       = new window.ZXing.BinaryBitmap(binary);
+            const result    = reader.decode(bmp);
+            if (result) barcode = result.getText();
+          } catch { /* no barcode in this frame */ }
         }
-        reader.reset();
-        barcodeStreamRef.current?.getTracks().forEach(t => t.stop());
-        photoStreamRef.current?.getTracks().forEach(t => t.stop());
-        onBarcodeResult(barcode);
-      });
-    } catch (e) { console.warn('ZXing error:', e); }
-  }, [barcodeReady, zxingLoaded]);
+
+        if (barcode && barcode !== lastCode) {
+          lastCode = barcode;
+          // Flash effect
+          if (video) { video.style.filter = 'brightness(2)'; setTimeout(() => { if (video) video.style.filter = ''; }, 150); }
+          cancelAnimationFrame(scanLoopRef.current);
+          barcodeStreamRef.current?.getTracks().forEach(t => t.stop());
+          photoStreamRef.current?.getTracks().forEach(t => t.stop());
+          onBarcodeResult(barcode);
+          return;
+        }
+      } catch { /* continue scanning */ }
+
+      scanLoopRef.current = requestAnimationFrame(scanFrame);
+    }
+
+    scanLoopRef.current = requestAnimationFrame(scanFrame);
+    return () => cancelAnimationFrame(scanLoopRef.current);
+  }, [barcodeReady, detectorReady]);
 
   function capturePhoto() {
     if (!photoVideoRef.current || !photoReady) return;
+    cancelAnimationFrame(scanLoopRef.current);
     const c = document.createElement('canvas');
     c.width  = photoVideoRef.current.videoWidth;
     c.height = photoVideoRef.current.videoHeight;
     c.getContext('2d').drawImage(photoVideoRef.current, 0, 0);
     barcodeStreamRef.current?.getTracks().forEach(t => t.stop());
     photoStreamRef.current?.getTracks().forEach(t => t.stop());
-    readerRef.current?.reset?.();
     onPhotoCapture(c.toDataURL('image/jpeg', 0.88).split(',')[1]);
   }
 
@@ -364,21 +411,21 @@ function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual }) {
         ))}
       </div>
 
-      {/* Barcode video — always mounted, shown/hidden via CSS */}
+      {/* Barcode video */}
       <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 12, background: '#000', minHeight: 260, display: isBarcode ? 'block' : 'none' }}>
         <video ref={barcodeVideoRef} style={{ width: '100%', display: 'block', maxHeight: 360, objectFit: 'cover', transition: 'filter 0.1s' }} playsInline muted />
         {barcodeReady && (
           <>
             <div style={{ position: 'absolute', left: '8%', right: '8%', top: '38%', bottom: '38%', border: '2px solid rgba(255,255,255,0.9)', borderRadius: 8, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)' }} />
             <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', fontSize: 12, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '5px 16px', borderRadius: 20, whiteSpace: 'nowrap' }}>
-              {zxingLoaded ? '🟢 Scanning barcode...' : 'Loading scanner...'}
+              {detectorRef.current ? '🟢 Auto-scanning...' : '🟡 Scanner loading...'}
             </div>
           </>
         )}
         {!barcodeReady && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>Starting camera...</span></div>}
       </div>
 
-      {/* Photo video — always mounted, shown/hidden via CSS */}
+      {/* Photo video */}
       <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 12, background: '#000', minHeight: 260, display: isBarcode ? 'none' : 'block' }}>
         <video ref={photoVideoRef} style={{ width: '100%', display: 'block', maxHeight: 360, objectFit: 'cover' }} playsInline muted />
         {photoReady && (
@@ -390,214 +437,9 @@ function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual }) {
         {!photoReady && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>Starting camera...</span></div>}
       </div>
 
-      {/* Photo capture button */}
-      {!isBarcode && (
-        <button onClick={capturePhoto} disabled={!photoReady} style={{ ...btnG, width: '100%', opacity: photoReady ? 1 : 0.5, fontSize: 15, marginBottom: 10 }}>
-          📷 Capture Label
-        </button>
-      )}
-
-      {/* Barcode hint */}
-      {isBarcode && (
-        <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-          No barcode? <button onClick={() => setScanMode('photo')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)', fontSize: 12, textDecoration: 'underline', fontFamily: 'var(--font)', padding: 0 }}>Switch to label scan</button>
-        </div>
-      )}
-
-      {onManual && (
-        <button onClick={onManual} style={{ ...btnS, width: '100%', fontSize: 13 }}>✏️ Enter manually</button>
-      )}
-    </div>
-  );
-}
-function HomeView({ library, stock, locations, categories, navigate }) {
-  const [alertModal, setAlertModal] = useState(null);
-  const active      = stock.filter(s => s.status === 'active');
-  const validActive = active.filter(s => library.find(d => d.id === s.libraryId));
-  const expired     = validActive.filter(s => getStatus(s.expiration).type === 'expired');
-  const thisMonth   = validActive.filter(s => getStatus(s.expiration).type === 'soon');
-  const soon90      = validActive.filter(s => getStatus(s.expiration).type === 'watch');
-  const belowPar    = library.filter(item => {
-    if (item.status === 'inactive' || !item.stationPar) return false;
-    const usable = validActive.filter(s => s.libraryId === item.id && getStatus(s.expiration).type !== 'expired').length;
-    return usable < item.stationPar;
-  });
-  const needsAttention = library.filter(d => d.status !== 'inactive').map(drug => {
-    const ds = validActive.filter(s => s.libraryId === drug.id);
-    const expiredCount = ds.filter(s => getStatus(s.expiration).type === 'expired').length;
-    const soonCount    = ds.filter(s => getStatus(s.expiration).type === 'soon').length;
-    return { drug, expiredCount, soonCount };
-  }).filter(({ expiredCount, soonCount }) => expiredCount > 0 || soonCount > 0)
-    .sort((a, b) => b.expiredCount - a.expiredCount);
-
-  function getAlertItems(type) {
-    const entries = type === 'expired' ? expired : type === 'soon' ? thisMonth : soon90;
-    const grouped = {};
-    entries.forEach(s => {
-      const item = library.find(d => d.id === s.libraryId); if (!item) return;
-      if (!grouped[item.id]) grouped[item.id] = { item, entries: [] };
-      grouped[item.id].entries.push(s);
-    });
-    return Object.values(grouped);
-  }
-
-  const alertLabels = {
-    expired: { title: 'Expired Items',           color: 'var(--color-danger-text)',  border: 'var(--color-danger-border)',  bg: 'var(--color-danger-bg)' },
-    soon:    { title: 'Expiring This Month',      color: 'var(--color-warning-text)', border: 'var(--color-warning-border)', bg: 'var(--color-warning-bg)' },
-    watch:   { title: 'Expiring Within 90 Days',  color: 'var(--color-watch-text)',   border: 'var(--color-watch-border)',   bg: 'var(--color-watch-bg)' },
-  };
-
-  return (
-    <div style={{ paddingBottom: 20 }}>
-      <div style={{ padding: '20px 20px 0', marginBottom: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <h1 style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em', marginBottom: 3 }}>🚑 EMS Inventory</h1>
-            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{library.filter(d => d.status !== 'inactive').length} items · {validActive.length} units tracked</div>
-          </div>
-          <button onClick={() => navigate('settings')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: 'var(--color-text-secondary)' }}>⚙️</button>
-        </div>
-      </div>
-
-      <div style={{ padding: '0 20px', display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 20 }}>
-        {[
-          { label: 'Expired',        count: new Set(expired.map(s => s.libraryId)).size,   units: expired.length,   type: 'expired' },
-          { label: 'This month',     count: new Set(thisMonth.map(s => s.libraryId)).size,  units: thisMonth.length, type: 'soon' },
-          { label: 'Within 90 days', count: new Set(soon90.map(s => s.libraryId)).size,    units: soon90.length,    type: 'watch' },
-        ].map(({ label, count, units, type }) => {
-          const s = SS[type]; const hasAny = count > 0;
-          return (
-            <div key={type} onClick={() => hasAny && setAlertModal(type)} style={{ background: hasAny ? s.bg : 'var(--color-bg-secondary)', border: hasAny ? `1.5px solid ${s.border}` : '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '12px 8px', textAlign: 'center', cursor: hasAny ? 'pointer' : 'default' }}>
-              <div style={{ fontSize: 26, fontWeight: 700, color: hasAny ? s.text : 'var(--color-text)', marginBottom: 1 }}>{count}</div>
-              <div style={{ fontSize: 10, fontWeight: 700, color: hasAny ? s.text : 'var(--color-text-tertiary)', marginBottom: 1 }}>{label}</div>
-              <div style={{ fontSize: 10, color: hasAny ? s.text : 'var(--color-text-tertiary)', opacity: 0.75 }}>{units} unit{units !== 1 ? 's' : ''}</div>
-              {hasAny && <div style={{ fontSize: 9, color: s.text, marginTop: 3, opacity: 0.7 }}>tap to view ↗</div>}
-            </div>
-          );
-        })}
-      </div>
-
-      <div style={{ padding: '0 20px' }}>
-        {belowPar.length > 0 && (
-          <div style={{ background: 'var(--color-warning-bg)', border: '1px solid var(--color-warning-border)', borderRadius: 'var(--radius-lg)', padding: '12px 14px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-warning-text)' }}>📦 {belowPar.length} item{belowPar.length !== 1 ? 's' : ''} below par</div>
-              <div style={{ fontSize: 11, color: 'var(--color-warning-text)', opacity: 0.8, marginTop: 2 }}>Order report recommended</div>
-            </div>
-            <button onClick={() => navigate('orderreport')} style={{ ...btnS, padding: '7px 12px', fontSize: 12 }}>View report</button>
-          </div>
-        )}
-        <button onClick={() => navigate('orderreport')} style={{ ...btnS, width: '100%', marginBottom: 20 }}>📋 Generate Order Report</button>
-        {needsAttention.length > 0 ? (
-          <>
-            <SectionHeader title="Needs Attention" />
-            {needsAttention.map(({ drug, expiredCount, soonCount }) => {
-              const cat = categories.find(c => c.id === drug.category);
-              return (
-                <div key={drug.id} onClick={() => navigate('drugdetail', { libraryId: drug.id })} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--color-bg)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', marginBottom: 8, cursor: 'pointer' }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 10, overflow: 'hidden', flexShrink: 0, background: 'var(--color-bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    {drug.profilePhoto ? <img src={`data:image/jpeg;base64,${drug.profilePhoto}`} alt="" style={{ width: 44, height: 44, objectFit: 'cover' }} /> : <span style={{ fontSize: 22 }}>{cat?.icon || '📦'}</span>}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>{drug.name}</div>
-                    <div style={{ fontSize: 12 }}>
-                      {expiredCount > 0 && <span style={{ color: 'var(--color-danger-text)', fontWeight: 500 }}>{expiredCount} expired</span>}
-                      {expiredCount > 0 && soonCount > 0 && <span style={{ color: 'var(--color-text-tertiary)' }}> · </span>}
-                      {soonCount > 0 && <span style={{ color: 'var(--color-warning-text)', fontWeight: 500 }}>{soonCount} expiring this month</span>}
-                    </div>
-                  </div>
-                  <span style={{ color: 'var(--color-text-tertiary)', fontSize: 18 }}>›</span>
-                </div>
-              );
-            })}
-          </>
-        ) : library.filter(d => d.status !== 'inactive').length > 0 ? (
-          <div style={{ textAlign: 'center', padding: '2rem' }}>
-            <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-success-text)' }}>All stock is good</div>
-          </div>
-        ) : (
-          <EmptyState icon="💊" title="No items yet" subtitle="Use Quick Receive to scan your first item" action={<button onClick={() => navigate('quickreceive')} style={{ ...btnG, padding: '10px 20px' }}>Quick Receive</button>} />
-        )}
-      </div>
-
-      {alertModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', zIndex: 200 }}>
-          <div style={{ width: '100%', maxWidth: 680, margin: '0 auto', background: 'var(--color-bg)', borderRadius: '20px 20px 0 0', padding: '24px 20px 36px', maxHeight: '80vh', overflow: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <div style={{ fontSize: 17, fontWeight: 700, color: alertLabels[alertModal].color }}>{alertLabels[alertModal].title}</div>
-              <button onClick={() => setAlertModal(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 24, color: 'var(--color-text-tertiary)' }}>×</button>
-            </div>
-            {getAlertItems(alertModal).map(({ item, entries }) => {
-              const cat    = categories.find(c => c.id === item.category);
-              const sorted = [...entries].sort((a, b) => { const da = parseExp(a.expiration), db = parseExp(b.expiration); if (!da && !db) return 0; if (!da) return 1; if (!db) return -1; return da - db; });
-              return (
-                <div key={item.id} style={{ marginBottom: 12 }}>
-                  <div onClick={() => { setAlertModal(null); navigate('drugdetail', { libraryId: item.id }); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: alertLabels[alertModal].bg, border: `1px solid ${alertLabels[alertModal].border}`, borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0', borderBottom: 'none', cursor: 'pointer' }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 8, overflow: 'hidden', flexShrink: 0, background: 'var(--color-bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {item.profilePhoto ? <img src={`data:image/jpeg;base64,${item.profilePhoto}`} alt="" style={{ width: 36, height: 36, objectFit: 'cover' }} /> : <span style={{ fontSize: 18 }}>{cat?.icon || '📦'}</span>}
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div>
-                      <div style={{ fontSize: 12, color: alertLabels[alertModal].color }}>{entries.length} unit{entries.length !== 1 ? 's' : ''} affected</div>
-                    </div>
-                    <span style={{ color: 'var(--color-text-tertiary)', fontSize: 16 }}>›</span>
-                  </div>
-                  {sorted.map((entry, i) => {
-                    const st = getStatus(entry.expiration); const es = SS[st.type];
-                    const loc = locations.find(l => l.id === entry.locationId);
-                    return (
-                      <div key={entry.id} style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', background: 'var(--color-bg)', border: `1px solid ${es.border}`, borderTop: 'none', borderRadius: i === sorted.length - 1 ? '0 0 var(--radius-lg) var(--radius-lg)' : '0' }}>
-                        <div style={{ flex: 1 }}>
-                          <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{entry.expiration === 'NA' ? 'N/A' : entry.expiration || '—'}</span>
-                          {loc && <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginLeft: 8 }}>📍 {loc.name}</span>}
-                        </div>
-                        <Badge type={st.type} label={st.label} />
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LocationsView({ locations, library, stock, categories, navigate }) {
-  const active = stock.filter(s => s.status === 'active');
-  return (
-    <div style={{ paddingBottom: 20 }}>
-      <div style={{ padding: '16px 20px 0', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2 style={{ fontSize: 20, fontWeight: 700 }}>Locations</h2>
-        <button onClick={() => navigate('settings')} style={{ ...btnP, padding: '7px 14px', fontSize: 13 }}>+ Add</button>
-      </div>
-      <div style={{ padding: '0 20px' }}>
-        {locations.map(loc => {
-          const locStock  = active.filter(s => s.locationId === loc.id);
-          const worst     = worstStatus(locStock); const ws = SS[worst];
-          const hasIssue  = worst === 'expired' || worst === 'soon';
-          const expCount  = locStock.filter(s => getStatus(s.expiration).type === 'expired').length;
-          const soonCount = locStock.filter(s => getStatus(s.expiration).type === 'soon').length;
-          return (
-            <div key={loc.id} onClick={() => navigate('locationdetail', { locationId: loc.id })} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', background: 'var(--color-bg)', border: hasIssue ? `1.5px solid ${ws.border}` : '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', marginBottom: 8, cursor: 'pointer' }}>
-              <span style={{ fontSize: 24 }}>{loc.icon}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 3 }}>{loc.name}</div>
-                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-                  <span style={{ fontWeight: 600, color: hasIssue ? ws.text : 'var(--color-text)' }}>{locStock.length} unit{locStock.length !== 1 ? 's' : ''}</span>
-                  {expCount > 0 && <span style={{ color: 'var(--color-danger-text)', fontWeight: 500 }}> · {expCount} expired</span>}
-                  {soonCount > 0 && <span style={{ color: 'var(--color-warning-text)', fontWeight: 500 }}> · {soonCount} this month</span>}
-                  {locStock.length === 0 && <span style={{ color: 'var(--color-text-tertiary)' }}> · empty</span>}
-                </div>
-              </div>
-              <span style={{ color: 'var(--color-text-tertiary)', fontSize: 18 }}>›</span>
-            </div>
-          );
-        })}
-      </div>
+      {!isBarcode && <button onClick={capturePhoto} disabled={!photoReady} style={{ ...btnG, width: '100%', opacity: photoReady ? 1 : 0.5, fontSize: 15, marginBottom: 10 }}>📷 Capture Label</button>}
+      {isBarcode && <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 10 }}>No barcode? <button onClick={() => setScanMode('photo')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)', fontSize: 12, textDecoration: 'underline', fontFamily: 'var(--font)', padding: 0 }}>Switch to label scan</button></div>}
+      {onManual && <button onClick={onManual} style={{ ...btnS, width: '100%', fontSize: 13 }}>✏️ Enter manually</button>}
     </div>
   );
 }
