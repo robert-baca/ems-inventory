@@ -130,18 +130,19 @@ const api = {
   get:           e      => fetch(`/api/${e}`).then(r => r.json()),
   post:          (e, d) => fetch(`/api/${e}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }).then(r => r.json()),
   getLibrary:    ()     => api.get('library'),
-  saveLibrary:   data   => api.post('library',    data),
+  saveLibrary:   data   => api.post('library', data),
   getStock:      ()     => api.get('stock'),
-  saveStock:     data   => api.post('stock',      data),
+  saveStock:     data   => api.post('stock', { replace: data }),
+  appendStock:   entries => api.post('stock', { entries }),
   getLocations:  ()     => api.get('locations'),
-  saveLocations: data   => api.post('locations',  data),
+  saveLocations: data   => api.post('locations', data),
   getCategories: ()     => api.get('categories'),
   saveCategories:data   => api.post('categories', data),
   getTemplates:  ()     => api.get('templates'),
-  saveTemplates: data   => api.post('templates',  data),
+  saveTemplates: data   => api.post('templates', data),
   getMap:        ()     => api.get('map'),
-  saveMap:       data   => api.post('map',        data),
-  scan: images => fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ images }) }).then(r => r.json()).then(d => { if (d.error) throw new Error(d.error); return d; }),
+  saveMap:       data   => api.post('map', data),
+  scan:      images     => fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ images }) }).then(r => r.json()).then(d => { if (d.error) throw new Error(d.error); return d; }),
   quickscan: (image, library) => fetch('/api/quickscan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image, library }) }).then(r => r.json()).then(d => { if (d.error) throw new Error(d.error); return d; }),
   ndcLookup: ndc => fetch(`/api/ndc?ndc=${encodeURIComponent(ndc)}`).then(r => r.json()),
 };
@@ -247,30 +248,28 @@ function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual }) {
   const barcodeStreamRef = useRef(null);
   const photoStreamRef   = useRef(null);
   const scanLoopRef      = useRef(null);
-  const [scanMode, setScanMode]         = useState('barcode');
-  const [barcodeReady, setBarcodeReady] = useState(false);
-  const [photoReady, setPhotoReady]     = useState(false);
-  const [err, setErr]                   = useState(null);
-  const [lastBarcode, setLastBarcode]   = useState(null);
+  const detectorRef      = useRef(null);
+  const [scanMode, setScanMode]           = useState('barcode');
+  const [barcodeReady, setBarcodeReady]   = useState(false);
+  const [photoReady, setPhotoReady]       = useState(false);
+  const [err, setErr]                     = useState(null);
   const [detectorReady, setDetectorReady] = useState(false);
-  const detectorRef = useRef(null);
+  const lastBarcodeRef = useRef(null);
 
   // Set up BarcodeDetector or ZXing fallback
   useEffect(() => {
     async function setupDetector() {
-      // Try native BarcodeDetector first (Android Chrome, desktop Chrome)
       if ('BarcodeDetector' in window) {
         try {
           const detector = new window.BarcodeDetector({
-            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'itf', 'data_matrix', 'qr_code']
+            formats: ['ean_13','ean_8','code_128','code_39','upc_a','upc_e','itf','data_matrix','qr_code']
           });
           detectorRef.current = detector;
           setDetectorReady(true);
           return;
-        } catch (e) { console.warn('BarcodeDetector setup failed:', e); }
+        } catch (e) { console.warn('BarcodeDetector failed:', e); }
       }
-
-      // Fallback: ZXing
+      // ZXing fallback
       if (window.ZXing) { setDetectorReady(true); return; }
       const existing = document.querySelector('script[data-zxing]');
       if (existing) { existing.addEventListener('load', () => setDetectorReady(true)); return; }
@@ -278,7 +277,7 @@ function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual }) {
       script.src = 'https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js';
       script.dataset.zxing = 'true';
       script.onload = () => setDetectorReady(true);
-      script.onerror = () => setDetectorReady(true); // proceed even if ZXing fails
+      script.onerror = () => setDetectorReady(true);
       document.head.appendChild(script);
     }
     setupDetector();
@@ -287,9 +286,7 @@ function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual }) {
   // Start both camera streams
   useEffect(() => {
     let active = true;
-    const constraints = {
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
-    };
+    const constraints = { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } };
 
     navigator.mediaDevices.getUserMedia(constraints)
       .then(stream => {
@@ -319,14 +316,13 @@ function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual }) {
     };
   }, []);
 
-  // Start scan loop when barcode video and detector are ready
+  // Scan loop
   useEffect(() => {
     if (!barcodeReady || !detectorReady) return;
     cancelAnimationFrame(scanLoopRef.current);
 
     const canvas = document.createElement('canvas');
     const ctx    = canvas.getContext('2d');
-    let lastCode = null;
 
     async function scanFrame() {
       const video = barcodeVideoRef.current;
@@ -334,35 +330,28 @@ function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual }) {
         scanLoopRef.current = requestAnimationFrame(scanFrame);
         return;
       }
-
       canvas.width  = video.videoWidth;
       canvas.height = video.videoHeight;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       try {
         let barcode = null;
-
         if (detectorRef.current) {
-          // Native BarcodeDetector
           const results = await detectorRef.current.detect(canvas);
           if (results.length > 0) barcode = results[0].rawValue;
         } else if (window.ZXing) {
-          // ZXing fallback — decode from image data
           try {
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const hints     = new Map();
-            const reader    = new window.ZXing.BrowserMultiFormatReader();
             const luminance = new window.ZXing.HTMLCanvasElementLuminanceSource(canvas);
             const binary    = new window.ZXing.HybridBinarizer(luminance);
             const bmp       = new window.ZXing.BinaryBitmap(binary);
+            const reader    = new window.ZXing.MultiFormatReader();
             const result    = reader.decode(bmp);
             if (result) barcode = result.getText();
-          } catch { /* no barcode in this frame */ }
+          } catch { /* no barcode this frame */ }
         }
 
-        if (barcode && barcode !== lastCode) {
-          lastCode = barcode;
-          // Flash effect
+        if (barcode && barcode !== lastBarcodeRef.current) {
+          lastBarcodeRef.current = barcode;
           if (video) { video.style.filter = 'brightness(2)'; setTimeout(() => { if (video) video.style.filter = ''; }, 150); }
           cancelAnimationFrame(scanLoopRef.current);
           barcodeStreamRef.current?.getTracks().forEach(t => t.stop());
@@ -370,7 +359,7 @@ function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual }) {
           onBarcodeResult(barcode);
           return;
         }
-      } catch { /* continue scanning */ }
+      } catch { /* continue */ }
 
       scanLoopRef.current = requestAnimationFrame(scanFrame);
     }
@@ -402,44 +391,229 @@ function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual }) {
 
   return (
     <div>
-      {/* Mode toggle */}
       <div style={{ display: 'flex', gap: 0, marginBottom: 12, borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--color-border)' }}>
         {[['barcode','📊 Scan Barcode'],['photo','📷 Scan Label']].map(([mode, label]) => (
-          <button key={mode} onClick={() => setScanMode(mode)} style={{ flex: 1, padding: '9px', border: 'none', background: scanMode === mode ? 'var(--color-text)' : 'var(--color-bg-secondary)', color: scanMode === mode ? 'var(--color-bg)' : 'var(--color-text-secondary)', fontWeight: scanMode === mode ? 700 : 400, cursor: 'pointer', fontFamily: 'var(--font)', fontSize: 13 }}>
-            {label}
-          </button>
+          <button key={mode} onClick={() => setScanMode(mode)} style={{ flex: 1, padding: '9px', border: 'none', background: scanMode === mode ? 'var(--color-text)' : 'var(--color-bg-secondary)', color: scanMode === mode ? 'var(--color-bg)' : 'var(--color-text-secondary)', fontWeight: scanMode === mode ? 700 : 400, cursor: 'pointer', fontFamily: 'var(--font)', fontSize: 13 }}>{label}</button>
         ))}
       </div>
 
       {/* Barcode video */}
       <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 12, background: '#000', minHeight: 260, display: isBarcode ? 'block' : 'none' }}>
         <video ref={barcodeVideoRef} style={{ width: '100%', display: 'block', maxHeight: 360, objectFit: 'cover', transition: 'filter 0.1s' }} playsInline muted />
-        {barcodeReady && (
-          <>
-            <div style={{ position: 'absolute', left: '8%', right: '8%', top: '38%', bottom: '38%', border: '2px solid rgba(255,255,255,0.9)', borderRadius: 8, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)' }} />
-            <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', fontSize: 12, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '5px 16px', borderRadius: 20, whiteSpace: 'nowrap' }}>
-              {detectorRef.current ? '🟢 Auto-scanning...' : '🟡 Scanner loading...'}
-            </div>
-          </>
-        )}
+        {barcodeReady && <>
+          <div style={{ position: 'absolute', left: '8%', right: '8%', top: '38%', bottom: '38%', border: '2px solid rgba(255,255,255,0.9)', borderRadius: 8, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)' }} />
+          <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', fontSize: 12, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '5px 16px', borderRadius: 20, whiteSpace: 'nowrap' }}>
+            {detectorRef.current ? '🟢 Auto-scanning...' : '🟡 Scanner loading...'}
+          </div>
+        </>}
         {!barcodeReady && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>Starting camera...</span></div>}
       </div>
 
       {/* Photo video */}
       <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 12, background: '#000', minHeight: 260, display: isBarcode ? 'none' : 'block' }}>
         <video ref={photoVideoRef} style={{ width: '100%', display: 'block', maxHeight: 360, objectFit: 'cover' }} playsInline muted />
-        {photoReady && (
-          <>
-            <div style={{ position: 'absolute', inset: '18%', border: '2px solid rgba(255,255,255,0.8)', borderRadius: 10, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)' }} />
-            <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', fontSize: 12, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '5px 16px', borderRadius: 20, whiteSpace: 'nowrap' }}>Aim at the full label</div>
-          </>
-        )}
+        {photoReady && <>
+          <div style={{ position: 'absolute', inset: '18%', border: '2px solid rgba(255,255,255,0.8)', borderRadius: 10, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)' }} />
+          <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', fontSize: 12, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '5px 16px', borderRadius: 20, whiteSpace: 'nowrap' }}>Aim at the full label</div>
+        </>}
         {!photoReady && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>Starting camera...</span></div>}
       </div>
 
       {!isBarcode && <button onClick={capturePhoto} disabled={!photoReady} style={{ ...btnG, width: '100%', opacity: photoReady ? 1 : 0.5, fontSize: 15, marginBottom: 10 }}>📷 Capture Label</button>}
       {isBarcode && <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 10 }}>No barcode? <button onClick={() => setScanMode('photo')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)', fontSize: 12, textDecoration: 'underline', fontFamily: 'var(--font)', padding: 0 }}>Switch to label scan</button></div>}
       {onManual && <button onClick={onManual} style={{ ...btnS, width: '100%', fontSize: 13 }}>✏️ Enter manually</button>}
+    </div>
+  );
+}
+
+function HomeView({ library, stock, locations, categories, navigate }) {
+  const [alertModal, setAlertModal] = useState(null);
+  const active      = stock.filter(s => s.status === 'active');
+  const validActive = active.filter(s => library.find(d => d.id === s.libraryId));
+  const expired     = validActive.filter(s => getStatus(s.expiration).type === 'expired');
+  const thisMonth   = validActive.filter(s => getStatus(s.expiration).type === 'soon');
+  const soon90      = validActive.filter(s => getStatus(s.expiration).type === 'watch');
+  const belowPar    = library.filter(item => {
+    if (item.status === 'inactive' || !item.stationPar) return false;
+    const usable = validActive.filter(s => s.libraryId === item.id && getStatus(s.expiration).type !== 'expired').length;
+    return usable < item.stationPar;
+  });
+  const needsAttention = library.filter(d => d.status !== 'inactive').map(drug => {
+    const ds = validActive.filter(s => s.libraryId === drug.id);
+    const expiredCount = ds.filter(s => getStatus(s.expiration).type === 'expired').length;
+    const soonCount    = ds.filter(s => getStatus(s.expiration).type === 'soon').length;
+    return { drug, expiredCount, soonCount };
+  }).filter(({ expiredCount, soonCount }) => expiredCount > 0 || soonCount > 0)
+    .sort((a, b) => b.expiredCount - a.expiredCount);
+
+  function getAlertItems(type) {
+    const entries = type === 'expired' ? expired : type === 'soon' ? thisMonth : soon90;
+    const grouped = {};
+    entries.forEach(s => {
+      const item = library.find(d => d.id === s.libraryId); if (!item) return;
+      if (!grouped[item.id]) grouped[item.id] = { item, entries: [] };
+      grouped[item.id].entries.push(s);
+    });
+    return Object.values(grouped);
+  }
+
+  const alertLabels = {
+    expired: { title: 'Expired Items',          color: 'var(--color-danger-text)',  border: 'var(--color-danger-border)',  bg: 'var(--color-danger-bg)' },
+    soon:    { title: 'Expiring This Month',     color: 'var(--color-warning-text)', border: 'var(--color-warning-border)', bg: 'var(--color-warning-bg)' },
+    watch:   { title: 'Expiring Within 90 Days', color: 'var(--color-watch-text)',   border: 'var(--color-watch-border)',   bg: 'var(--color-watch-bg)' },
+  };
+
+  return (
+    <div style={{ paddingBottom: 20 }}>
+      <div style={{ padding: '20px 20px 0', marginBottom: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <h1 style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em', marginBottom: 3 }}>🚑 EMS Inventory</h1>
+            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{library.filter(d => d.status !== 'inactive').length} items · {validActive.length} units tracked</div>
+          </div>
+          <button onClick={() => navigate('settings')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: 'var(--color-text-secondary)' }}>⚙️</button>
+        </div>
+      </div>
+
+      <div style={{ padding: '0 20px', display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 20 }}>
+        {[
+          { label: 'Expired',        count: new Set(expired.map(s => s.libraryId)).size,  units: expired.length,   type: 'expired' },
+          { label: 'This month',     count: new Set(thisMonth.map(s => s.libraryId)).size, units: thisMonth.length, type: 'soon' },
+          { label: 'Within 90 days', count: new Set(soon90.map(s => s.libraryId)).size,   units: soon90.length,    type: 'watch' },
+        ].map(({ label, count, units, type }) => {
+          const s = SS[type]; const hasAny = count > 0;
+          return (
+            <div key={type} onClick={() => hasAny && setAlertModal(type)} style={{ background: hasAny ? s.bg : 'var(--color-bg-secondary)', border: hasAny ? `1.5px solid ${s.border}` : '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '12px 8px', textAlign: 'center', cursor: hasAny ? 'pointer' : 'default' }}>
+              <div style={{ fontSize: 26, fontWeight: 700, color: hasAny ? s.text : 'var(--color-text)', marginBottom: 1 }}>{count}</div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: hasAny ? s.text : 'var(--color-text-tertiary)', marginBottom: 1 }}>{label}</div>
+              <div style={{ fontSize: 10, color: hasAny ? s.text : 'var(--color-text-tertiary)', opacity: 0.75 }}>{units} unit{units !== 1 ? 's' : ''}</div>
+              {hasAny && <div style={{ fontSize: 9, color: s.text, marginTop: 3, opacity: 0.7 }}>tap to view ↗</div>}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ padding: '0 20px' }}>
+        {belowPar.length > 0 && (
+          <div style={{ background: 'var(--color-warning-bg)', border: '1px solid var(--color-warning-border)', borderRadius: 'var(--radius-lg)', padding: '12px 14px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-warning-text)' }}>📦 {belowPar.length} item{belowPar.length !== 1 ? 's' : ''} below par</div>
+              <div style={{ fontSize: 11, color: 'var(--color-warning-text)', opacity: 0.8, marginTop: 2 }}>Order report recommended</div>
+            </div>
+            <button onClick={() => navigate('orderreport')} style={{ ...btnS, padding: '7px 12px', fontSize: 12 }}>View report</button>
+          </div>
+        )}
+        <button onClick={() => navigate('orderreport')} style={{ ...btnS, width: '100%', marginBottom: 20 }}>📋 Generate Order Report</button>
+        {needsAttention.length > 0 ? (
+          <>
+            <SectionHeader title="Needs Attention" />
+            {needsAttention.map(({ drug, expiredCount, soonCount }) => {
+              const cat = categories.find(c => c.id === drug.category);
+              return (
+                <div key={drug.id} onClick={() => navigate('drugdetail', { libraryId: drug.id })} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--color-bg)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', marginBottom: 8, cursor: 'pointer' }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 10, overflow: 'hidden', flexShrink: 0, background: 'var(--color-bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {drug.profilePhoto ? <img src={`data:image/jpeg;base64,${drug.profilePhoto}`} alt="" style={{ width: 44, height: 44, objectFit: 'cover' }} /> : <span style={{ fontSize: 22 }}>{cat?.icon || '📦'}</span>}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>{drug.name}</div>
+                    <div style={{ fontSize: 12 }}>
+                      {expiredCount > 0 && <span style={{ color: 'var(--color-danger-text)', fontWeight: 500 }}>{expiredCount} expired</span>}
+                      {expiredCount > 0 && soonCount > 0 && <span style={{ color: 'var(--color-text-tertiary)' }}> · </span>}
+                      {soonCount > 0 && <span style={{ color: 'var(--color-warning-text)', fontWeight: 500 }}>{soonCount} expiring this month</span>}
+                    </div>
+                  </div>
+                  <span style={{ color: 'var(--color-text-tertiary)', fontSize: 18 }}>›</span>
+                </div>
+              );
+            })}
+          </>
+        ) : library.filter(d => d.status !== 'inactive').length > 0 ? (
+          <div style={{ textAlign: 'center', padding: '2rem' }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-success-text)' }}>All stock is good</div>
+          </div>
+        ) : (
+          <EmptyState icon="💊" title="No items yet" subtitle="Use Quick Receive to scan your first item" action={<button onClick={() => navigate('quickreceive')} style={{ ...btnG, padding: '10px 20px' }}>Quick Receive</button>} />
+        )}
+      </div>
+
+      {alertModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', zIndex: 200 }}>
+          <div style={{ width: '100%', maxWidth: 680, margin: '0 auto', background: 'var(--color-bg)', borderRadius: '20px 20px 0 0', padding: '24px 20px 36px', maxHeight: '80vh', overflow: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: alertLabels[alertModal].color }}>{alertLabels[alertModal].title}</div>
+              <button onClick={() => setAlertModal(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 24, color: 'var(--color-text-tertiary)' }}>×</button>
+            </div>
+            {getAlertItems(alertModal).map(({ item, entries }) => {
+              const cat    = categories.find(c => c.id === item.category);
+              const sorted = [...entries].sort((a, b) => { const da = parseExp(a.expiration), db = parseExp(b.expiration); if (!da && !db) return 0; if (!da) return 1; if (!db) return -1; return da - db; });
+              return (
+                <div key={item.id} style={{ marginBottom: 12 }}>
+                  <div onClick={() => { setAlertModal(null); navigate('drugdetail', { libraryId: item.id }); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: alertLabels[alertModal].bg, border: `1px solid ${alertLabels[alertModal].border}`, borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0', borderBottom: 'none', cursor: 'pointer' }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 8, overflow: 'hidden', flexShrink: 0, background: 'var(--color-bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {item.profilePhoto ? <img src={`data:image/jpeg;base64,${item.profilePhoto}`} alt="" style={{ width: 36, height: 36, objectFit: 'cover' }} /> : <span style={{ fontSize: 18 }}>{cat?.icon || '📦'}</span>}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div>
+                      <div style={{ fontSize: 12, color: alertLabels[alertModal].color }}>{entries.length} unit{entries.length !== 1 ? 's' : ''} affected</div>
+                    </div>
+                    <span style={{ color: 'var(--color-text-tertiary)', fontSize: 16 }}>›</span>
+                  </div>
+                  {sorted.map((entry, i) => {
+                    const st = getStatus(entry.expiration); const es = SS[st.type];
+                    const loc = locations.find(l => l.id === entry.locationId);
+                    return (
+                      <div key={entry.id} style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', background: 'var(--color-bg)', border: `1px solid ${es.border}`, borderTop: 'none', borderRadius: i === sorted.length - 1 ? '0 0 var(--radius-lg) var(--radius-lg)' : '0' }}>
+                        <div style={{ flex: 1 }}>
+                          <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{entry.expiration === 'NA' ? 'N/A' : entry.expiration || '—'}</span>
+                          {loc && <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginLeft: 8 }}>📍 {loc.name}</span>}
+                        </div>
+                        <Badge type={st.type} label={st.label} />
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LocationsView({ locations, library, stock, categories, navigate }) {
+  const active = stock.filter(s => s.status === 'active');
+  return (
+    <div style={{ paddingBottom: 20 }}>
+      <div style={{ padding: '16px 20px 0', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2 style={{ fontSize: 20, fontWeight: 700 }}>Locations</h2>
+        <button onClick={() => navigate('settings')} style={{ ...btnP, padding: '7px 14px', fontSize: 13 }}>+ Add</button>
+      </div>
+      <div style={{ padding: '0 20px' }}>
+        {locations.map(loc => {
+          const locStock  = active.filter(s => s.locationId === loc.id);
+          const worst     = worstStatus(locStock); const ws = SS[worst];
+          const hasIssue  = worst === 'expired' || worst === 'soon';
+          const expCount  = locStock.filter(s => getStatus(s.expiration).type === 'expired').length;
+          const soonCount = locStock.filter(s => getStatus(s.expiration).type === 'soon').length;
+          return (
+            <div key={loc.id} onClick={() => navigate('locationdetail', { locationId: loc.id })} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', background: 'var(--color-bg)', border: hasIssue ? `1.5px solid ${ws.border}` : '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', marginBottom: 8, cursor: 'pointer' }}>
+              <span style={{ fontSize: 24 }}>{loc.icon}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 3 }}>{loc.name}</div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                  <span style={{ fontWeight: 600, color: hasIssue ? ws.text : 'var(--color-text)' }}>{locStock.length} unit{locStock.length !== 1 ? 's' : ''}</span>
+                  {expCount > 0 && <span style={{ color: 'var(--color-danger-text)', fontWeight: 500 }}> · {expCount} expired</span>}
+                  {soonCount > 0 && <span style={{ color: 'var(--color-warning-text)', fontWeight: 500 }}> · {soonCount} this month</span>}
+                  {locStock.length === 0 && <span style={{ color: 'var(--color-text-tertiary)' }}> · empty</span>}
+                </div>
+              </div>
+              <span style={{ color: 'var(--color-text-tertiary)', fontSize: 18 }}>›</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -451,7 +625,6 @@ function LocationDetailView({ locationId, locations, library, stock, categories,
   const [moveQty, setMoveQty]     = useState(1);
   const [moveTo, setMoveTo]       = useState('');
   if (!loc) return null;
-
   const active     = stock.filter(s => s.status === 'active' && s.locationId === locationId);
   const tabs       = categories.filter(cat => active.some(s => { const item = library.find(i => i.id === s.libraryId); return item?.category === cat.id; }));
   const displayTab = activeTab || tabs[0]?.id;
@@ -461,21 +634,17 @@ function LocationDetailView({ locationId, locations, library, stock, categories,
     if (!grouped[item.id]) grouped[item.id] = { item, entries: [] };
     grouped[item.id].entries.push(s);
   });
-
   function handleMove() {
     if (!moveTo || !movingItem) return;
     onSaveStock(fifoMove(stock, movingItem.id, moveQty, locationId, moveTo));
     setMovingItem(null);
   }
-
   return (
     <div style={{ paddingBottom: 20 }}>
       <TopBar title={loc.name} subtitle={`${active.length} units`} onBack={() => navigate('locations')} right={<button onClick={() => navigate('addstock', { locationId })} style={{ ...btnG, padding: '7px 14px', fontSize: 13 }}>+ Add stock</button>} />
       {tabs.length > 0 && (
         <div style={{ display: 'flex', gap: 6, padding: '0 20px', overflowX: 'auto', marginBottom: 16, paddingBottom: 4 }}>
-          {tabs.map(cat => (
-            <button key={cat.id} onClick={() => setActiveTab(cat.id)} style={{ flexShrink: 0, padding: '6px 14px', borderRadius: 20, fontSize: 13, cursor: 'pointer', fontWeight: displayTab === cat.id ? 600 : 400, background: displayTab === cat.id ? 'var(--color-text)' : 'transparent', color: displayTab === cat.id ? 'var(--color-bg)' : 'var(--color-text-secondary)', border: displayTab === cat.id ? 'none' : '1px solid var(--color-border)', fontFamily: 'var(--font)' }}>{cat.icon} {cat.name}</button>
-          ))}
+          {tabs.map(cat => <button key={cat.id} onClick={() => setActiveTab(cat.id)} style={{ flexShrink: 0, padding: '6px 14px', borderRadius: 20, fontSize: 13, cursor: 'pointer', fontWeight: displayTab === cat.id ? 600 : 400, background: displayTab === cat.id ? 'var(--color-text)' : 'transparent', color: displayTab === cat.id ? 'var(--color-bg)' : 'var(--color-text-secondary)', border: displayTab === cat.id ? 'none' : '1px solid var(--color-border)', fontFamily: 'var(--font)' }}>{cat.icon} {cat.name}</button>)}
         </div>
       )}
       <div style={{ padding: '0 20px' }}>
@@ -602,12 +771,12 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
     if (drawingLine) { setDrawingLine(l => ({ ...l, x2: pos.x, y2: pos.y })); return; }
     if (!dragItem) return;
     const dx = e.clientX - dragItem.startMouseX; const dy = e.clientY - dragItem.startMouseY;
-    if (dragItem.type === 'room-move')   setMap(m => ({ ...m, rooms: (m.rooms||[]).map(r => r.id===dragItem.id ? { ...r, x: Math.max(0,dragItem.startX+dx), y: Math.max(0,dragItem.startY+dy) } : r) }));
-    else if (dragItem.type === 'room-resize') setMap(m => ({ ...m, rooms: (m.rooms||[]).map(r => r.id===dragItem.id ? { ...r, w: Math.max(80,dragItem.startW+dx), h: Math.max(60,dragItem.startH+dy) } : r) }));
-    else if (dragItem.type === 'pin')    setMap(m => ({ ...m, pins: (m.pins||[]).map(p => p.id===dragItem.id ? { ...p, x: Math.max(0,dragItem.startX+dx), y: Math.max(0,dragItem.startY+dy) } : p) }));
-    else if (dragItem.type === 'door')   setMap(m => ({ ...m, doors: (m.doors||[]).map(d => d.id===dragItem.id ? { ...d, x: Math.max(0,dragItem.startX+dx), y: Math.max(0,dragItem.startY+dy) } : d) }));
-    else if (dragItem.type === 'line-p1') setMap(m => ({ ...m, lines: (m.lines||[]).map(l => l.id===dragItem.id ? { ...l, x1: pos.x, y1: pos.y } : l) }));
-    else if (dragItem.type === 'line-p2') setMap(m => ({ ...m, lines: (m.lines||[]).map(l => l.id===dragItem.id ? { ...l, x2: pos.x, y2: pos.y } : l) }));
+    if (dragItem.type === 'room-move')   setMap(m => ({ ...m, rooms: (m.rooms||[]).map(r => r.id===dragItem.id?{...r,x:Math.max(0,dragItem.startX+dx),y:Math.max(0,dragItem.startY+dy)}:r) }));
+    else if (dragItem.type === 'room-resize') setMap(m => ({ ...m, rooms: (m.rooms||[]).map(r => r.id===dragItem.id?{...r,w:Math.max(80,dragItem.startW+dx),h:Math.max(60,dragItem.startH+dy)}:r) }));
+    else if (dragItem.type === 'pin')    setMap(m => ({ ...m, pins: (m.pins||[]).map(p => p.id===dragItem.id?{...p,x:Math.max(0,dragItem.startX+dx),y:Math.max(0,dragItem.startY+dy)}:p) }));
+    else if (dragItem.type === 'door')   setMap(m => ({ ...m, doors: (m.doors||[]).map(d => d.id===dragItem.id?{...d,x:Math.max(0,dragItem.startX+dx),y:Math.max(0,dragItem.startY+dy)}:d) }));
+    else if (dragItem.type === 'line-p1') setMap(m => ({ ...m, lines: (m.lines||[]).map(l => l.id===dragItem.id?{...l,x1:pos.x,y1:pos.y}:l) }));
+    else if (dragItem.type === 'line-p2') setMap(m => ({ ...m, lines: (m.lines||[]).map(l => l.id===dragItem.id?{...l,x2:pos.x,y2:pos.y}:l) }));
   }
   function handleCanvasMouseUp() {
     if (drawingLine) {
@@ -678,7 +847,6 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
           </>
         )}
       </div>
-
       <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
         <div ref={canvasRef} style={{ flex:1, overflow:'auto', position:'relative', background:'var(--color-bg)', cursor: tool==='line'?'crosshair':tool==='door'?'copy':'default' }}
           onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp}>
@@ -707,27 +875,25 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
               </g>;
             })}
           </svg>
-
           <div style={{ position:'absolute', top:0, left:0, width:SVG_W, height:SVG_H }}>
             {(map.rooms||[]).map(room => {
               const isSel = selectedRoom===room.id;
               return <div key={room.id} style={{ position:'absolute', left:room.x, top:room.y, width:room.w, height:room.h, background:room.color+'bb', border:`${isSel?3:2}px solid ${isSel?'#1a1a1a':room.color}`, borderRadius:10, boxShadow:isSel?'0 0 0 3px rgba(0,0,0,0.18)':'none', userSelect:'none', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:6, cursor:editing?'move':'default' }}
                 onMouseDown={e=>{if(editing){e.stopPropagation();setSelectedRoom(room.id);setSelectedLine(null);setSelectedDoor(null);startDrag(e,'room-move',room.id);}}}
                 onClick={e=>{if(editing){e.stopPropagation();setSelectedRoom(room.id);}}}>
-                {isSel&&editing ? (
+                {isSel&&editing?(
                   <>
                     <input value={room.name} onChange={e=>setMap(m=>({...m,rooms:(m.rooms||[]).map(r=>r.id===room.id?{...r,name:e.target.value}:r)}))} onBlur={()=>onSaveMap(map)} onClick={e=>e.stopPropagation()} style={{ background:'transparent', border:'none', textAlign:'center', fontWeight:700, fontSize:15, color:'#1e293b', outline:'none', width:'85%' }} autoFocus />
                     <div style={{ display:'flex', gap:4, flexWrap:'wrap', justifyContent:'center', padding:'0 8px' }}>
                       {ROOM_COLORS.map(c => <div key={c} onClick={e=>{e.stopPropagation();updateMap({...map,rooms:(map.rooms||[]).map(r=>r.id===room.id?{...r,color:c}:r)});}} style={{ width:16, height:16, borderRadius:'50%', background:c, border:`2px solid ${room.color===c?'#1a1a1a':'rgba(0,0,0,0.15)'}`, cursor:'pointer' }} />)}
                     </div>
                   </>
-                ) : <span style={{ fontWeight:700, fontSize:14, color:'#1e293b', textAlign:'center', padding:'0 8px' }}>{room.name}</span>}
-                {editing && <div onMouseDown={e=>{e.stopPropagation();startDrag(e,'room-resize',room.id);}} style={{ position:'absolute', right:0, bottom:0, width:20, height:20, cursor:'se-resize', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                ):<span style={{ fontWeight:700, fontSize:14, color:'#1e293b', textAlign:'center', padding:'0 8px' }}>{room.name}</span>}
+                {editing&&<div onMouseDown={e=>{e.stopPropagation();startDrag(e,'room-resize',room.id);}} style={{ position:'absolute', right:0, bottom:0, width:20, height:20, cursor:'se-resize', display:'flex', alignItems:'center', justifyContent:'center' }}>
                   <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 10 L10 10 L10 2" stroke="#64748b" strokeWidth="2" fill="none" strokeLinecap="round"/><path d="M5 10 L10 10 L10 5" stroke="#64748b" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>
                 </div>}
               </div>;
             })}
-
             {(map.pins||[]).map(pin => {
               const loc = locations.find(l => l.id===pin.locationId); if (!loc) return null;
               const locStock = active.filter(s=>s.locationId===loc.id); const worst=worstStatus(locStock); const ws=SS[worst]; const hasIssue=worst==='expired'||worst==='soon';
@@ -737,21 +903,19 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
                 onClick={e=>{e.stopPropagation();if(!editing)setSelectedPin(loc.id===selectedPin?null:loc.id);}}>
                 <div style={{ background:hasIssue?ws.bg:'var(--color-bg)', border:`2px solid ${hasIssue?ws.border:isPanelOpen?'#1a1a1a':'var(--color-border)'}`, borderRadius:10, padding:'6px 10px', fontSize:12, fontWeight:600, whiteSpace:'nowrap', boxShadow:'0 2px 8px rgba(0,0,0,0.15)', display:'flex', alignItems:'center', gap:6, color:hasIssue?ws.text:'var(--color-text)', cursor:editing?'move':'pointer' }}>
                   <span>{loc.icon}</span><span>{loc.name}</span><span style={{ fontSize:11, opacity:0.75 }}>({locStock.length})</span>
-                  {editing && <button onClick={e=>{e.stopPropagation();updateMap({...map,pins:(map.pins||[]).filter(p=>p.id!==pin.id)});}} style={{ background:'#dc2626', border:'none', color:'#fff', borderRadius:'50%', width:16, height:16, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize:11, marginLeft:2, flexShrink:0 }}>×</button>}
+                  {editing&&<button onClick={e=>{e.stopPropagation();updateMap({...map,pins:(map.pins||[]).filter(p=>p.id!==pin.id)});}} style={{ background:'#dc2626', border:'none', color:'#fff', borderRadius:'50%', width:16, height:16, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize:11, marginLeft:2, flexShrink:0 }}>×</button>}
                 </div>
               </div>;
             })}
           </div>
-
-          {!map.bgImage && (map.rooms||[]).length===0 && (map.lines||[]).length===0 && (
+          {!map.bgImage&&(map.rooms||[]).length===0&&(map.lines||[]).length===0&&(
             <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:10, color:'var(--color-text-tertiary)', pointerEvents:'none' }}>
               <div style={{ fontSize:48 }}>🏗️</div>
               <div style={{ fontSize:14, fontWeight:500 }}>{editing?'Use tools above to build your station map':'Click "Edit map" to get started'}</div>
             </div>
           )}
         </div>
-
-        {editing && selectedLine && (
+        {editing&&selectedLine&&(
           <div style={{ width:220, background:'var(--color-bg)', borderLeft:'1px solid var(--color-border)', padding:16, flexShrink:0 }}>
             <div style={{ fontSize:14, fontWeight:700, marginBottom:14 }}>Line / Wall</div>
             <div style={{ marginBottom:12 }}>
@@ -761,7 +925,7 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
             <div style={{ marginBottom:12 }}>
               <label style={{ display:'block', fontSize:12, color:'var(--color-text-secondary)', marginBottom:5 }}>Color</label>
               <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                {['#334155','#1e40af','#166534','#991b1b','#92400e','#6b21a8'].map(c => (
+                {['#334155','#1e40af','#166534','#991b1b','#92400e','#6b21a8'].map(c=>(
                   <div key={c} onClick={()=>updateMap({...map,lines:(map.lines||[]).map(l=>l.id===selectedLine?{...l,color:c}:l)})} style={{ width:24, height:24, borderRadius:6, background:c, border:`3px solid ${(map.lines||[]).find(l=>l.id===selectedLine)?.color===c?'#fff':'transparent'}`, cursor:'pointer', boxShadow:'0 1px 3px rgba(0,0,0,0.3)' }} />
                 ))}
               </div>
@@ -769,8 +933,7 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
             <button onClick={deleteSelected} style={{ ...btnS, width:'100%', fontSize:12, color:'var(--color-danger-text)', borderColor:'var(--color-danger-border)' }}>🗑 Delete</button>
           </div>
         )}
-
-        {editing && selectedDoor && (
+        {editing&&selectedDoor&&(
           <div style={{ width:220, background:'var(--color-bg)', borderLeft:'1px solid var(--color-border)', padding:16, flexShrink:0 }}>
             <div style={{ fontSize:14, fontWeight:700, marginBottom:14 }}>Door</div>
             <div style={{ marginBottom:12 }}>
@@ -785,8 +948,7 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
             <button onClick={deleteSelected} style={{ ...btnS, width:'100%', fontSize:12, color:'var(--color-danger-text)', borderColor:'var(--color-danger-border)' }}>🗑 Delete</button>
           </div>
         )}
-
-        {!editing && selectedLocObj && (
+        {!editing&&selectedLocObj&&(
           <div style={{ width:320, background:'var(--color-bg)', borderLeft:'1px solid var(--color-border)', overflow:'auto', padding:20, flexShrink:0 }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
               <div>
@@ -809,10 +971,10 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
                     <Badge type={st.type} label={st.label} />
                   </div>;
                 })}
-                {entries.length>3 && <div style={{ fontSize:11, color:'var(--color-text-tertiary)', marginTop:4 }}>+{entries.length-3} more</div>}
+                {entries.length>3&&<div style={{ fontSize:11, color:'var(--color-text-tertiary)', marginTop:4 }}>+{entries.length-3} more</div>}
               </div>;
             })}
-            {selectedStock.length===0 && <div style={{ textAlign:'center', padding:'2rem', color:'var(--color-text-secondary)', fontSize:13 }}>No stock in this location</div>}
+            {selectedStock.length===0&&<div style={{ textAlign:'center', padding:'2rem', color:'var(--color-text-secondary)', fontSize:13 }}>No stock in this location</div>}
           </div>
         )}
       </div>
@@ -856,7 +1018,7 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
       .sort((a, b) => {
         if (a.expiration==='NA'&&b.expiration==='NA') return 0;
         if (a.expiration==='NA') return 1; if (b.expiration==='NA') return -1;
-        const da=parseExp(a.expiration), db=parseExp(b.expiration);
+        const da=parseExp(a.expiration),db=parseExp(b.expiration);
         if (!da&&!db) return 0; if (!da) return 1; if (!db) return -1; return da-db;
       });
   }
@@ -883,28 +1045,26 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
         <h2 style={{ fontSize: 20, fontWeight: 700 }}>Inventory</h2>
         <button onClick={() => navigate('addstock', {})} style={{ ...btnG, padding: '7px 14px', fontSize: 13 }}>+ Add Stock</button>
       </div>
-
       <div style={{ display: 'flex', gap: 0, padding: '0 20px', overflowX: 'auto', marginBottom: 12, borderBottom: '1px solid var(--color-border)' }}>
-        <button onClick={() => setActiveTab('all')} style={{ flexShrink:0, padding:'8px 14px', border:'none', borderBottom: activeTab==='all'?'2px solid var(--color-text)':'2px solid transparent', background:'transparent', color: activeTab==='all'?'var(--color-text)':'var(--color-text-secondary)', fontWeight: activeTab==='all'?700:400, fontSize:14, cursor:'pointer', fontFamily:'var(--font)', marginBottom:-1 }}>All</button>
+        <button onClick={() => setActiveTab('all')} style={{ flexShrink:0, padding:'8px 14px', border:'none', borderBottom:activeTab==='all'?'2px solid var(--color-text)':'2px solid transparent', background:'transparent', color:activeTab==='all'?'var(--color-text)':'var(--color-text-secondary)', fontWeight:activeTab==='all'?700:400, fontSize:14, cursor:'pointer', fontFamily:'var(--font)', marginBottom:-1 }}>All</button>
         {categories.map(cat => (
-          <button key={cat.id} onClick={() => setActiveTab(cat.id)} style={{ flexShrink:0, padding:'8px 14px', border:'none', borderBottom: activeTab===cat.id?'2px solid var(--color-text)':'2px solid transparent', background:'transparent', color: activeTab===cat.id?'var(--color-text)':'var(--color-text-secondary)', fontWeight: activeTab===cat.id?700:400, fontSize:14, cursor:'pointer', fontFamily:'var(--font)', marginBottom:-1 }}>{cat.icon} {cat.name}</button>
+          <button key={cat.id} onClick={() => setActiveTab(cat.id)} style={{ flexShrink:0, padding:'8px 14px', border:'none', borderBottom:activeTab===cat.id?'2px solid var(--color-text)':'2px solid transparent', background:'transparent', color:activeTab===cat.id?'var(--color-text)':'var(--color-text-secondary)', fontWeight:activeTab===cat.id?700:400, fontSize:14, cursor:'pointer', fontFamily:'var(--font)', marginBottom:-1 }}>{cat.icon} {cat.name}</button>
         ))}
         <button onClick={() => { const name=prompt('Category name?'); if(!name) return; const icon=prompt('Emoji icon?')||'📦'; onSaveCategories([...categories,{id:uid(),name,icon}]); }} style={{ flexShrink:0, padding:'8px 12px', border:'none', borderBottom:'2px solid transparent', background:'transparent', color:'var(--color-text-tertiary)', fontSize:14, cursor:'pointer', fontFamily:'var(--font)', marginBottom:-1 }}>+</button>
       </div>
-
       <div style={{ padding: '0 20px' }}>
         <div style={{ position:'relative', marginBottom:10 }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', color:'var(--color-text-tertiary)', pointerEvents:'none' }}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{ paddingLeft:30, paddingRight:search?30:10 }} />
-          {search && <button onClick={()=>setSearch('')} style={{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'var(--color-text-tertiary)', fontSize:18, lineHeight:1, padding:0 }}>×</button>}
+          {search&&<button onClick={()=>setSearch('')} style={{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'var(--color-text-tertiary)', fontSize:18, lineHeight:1, padding:0 }}>×</button>}
         </div>
         <div style={{ display:'flex', gap:6, marginBottom:14, overflowX:'auto' }}>
           {[['all','All'],['issues','Issues'],['watch','Watch'],['good','Good']].map(([val,label]) => (
             <button key={val} onClick={()=>setFilter(val)} style={{ flexShrink:0, padding:'5px 14px', borderRadius:20, fontSize:12, cursor:'pointer', fontWeight:filter===val?600:400, background:filter===val?'var(--color-text)':'transparent', color:filter===val?'var(--color-bg)':'var(--color-text-secondary)', border:filter===val?'none':'1px solid var(--color-border)', fontFamily:'var(--font)' }}>{label}</button>
           ))}
         </div>
-        {items.length>0 && <div style={{ fontSize:12, color:'var(--color-text-tertiary)', marginBottom:10 }}>{items.length} item{items.length!==1?'s':''} · {items.reduce((s,{entries})=>s+entries.length,0)} total units</div>}
-        {items.length===0 && <EmptyState icon="📋" title="No stock found" subtitle={q?`No results for "${q}"`:active.length===0?'No stock added yet — use Quick Receive or Add Stock':'No stock matches this filter'} action={active.length===0?<button onClick={()=>navigate('addstock',{})} style={{...btnG,padding:'10px 20px'}}>+ Add Stock</button>:null} />}
+        {items.length>0&&<div style={{ fontSize:12, color:'var(--color-text-tertiary)', marginBottom:10 }}>{items.length} item{items.length!==1?'s':''} · {items.reduce((s,{entries})=>s+entries.length,0)} total units</div>}
+        {items.length===0&&<EmptyState icon="📋" title="No stock found" subtitle={q?`No results for "${q}"`:active.length===0?'No stock added yet — use Quick Receive or Add Stock':'No stock matches this filter'} action={active.length===0?<button onClick={()=>navigate('addstock',{})} style={{...btnG,padding:'10px 20px'}}>+ Add Stock</button>:null} />}
         {items.map(({ item, entries, worst }) => {
           const ws=SS[worst]; const hasIssue=worst==='expired'||worst==='soon';
           const par=item.stationPar||0; const usable=entries.filter(s=>getStatus(s.expiration).type!=='expired').length; const belowPar=par>0&&usable<par;
@@ -933,7 +1093,7 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
                   {hasIssue&&<Badge type={worst} label={worst==='expired'?'EXPIRED':'EXP SOON'} />}
                   <div style={{ display:'flex', gap:6 }}>
                     <button onClick={()=>openMove(item)} style={{ ...btnS, padding:'5px 12px', fontSize:12 }}>Move</button>
-                    <button onClick={()=>{ if(!window.confirm(`Remove all ${item.name} stock from inventory?`))return; onSaveStock(stock.filter(s=>s.libraryId!==item.id)); }} style={{ ...btnS, padding:'5px 12px', fontSize:12, color:'var(--color-danger-text)', borderColor:'var(--color-danger-border)' }}>Delete</button>
+                    <button onClick={()=>{ if(!window.confirm(`Remove all ${item.name} stock?`))return; onSaveStock(stock.filter(s=>s.libraryId!==item.id)); }} style={{ ...btnS, padding:'5px 12px', fontSize:12, color:'var(--color-danger-text)', borderColor:'var(--color-danger-border)' }}>Delete</button>
                   </div>
                 </div>
               </div>
@@ -941,8 +1101,7 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
           );
         })}
       </div>
-
-      {movingItem && (
+      {movingItem&&(
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', display:'flex', alignItems:'flex-end', zIndex:200 }}>
           <div style={{ width:'100%', maxWidth:680, margin:'0 auto', background:'var(--color-bg)', borderRadius:'20px 20px 0 0', padding:'24px 20px 36px', maxHeight:'85vh', overflow:'auto' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
@@ -952,7 +1111,7 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
               </div>
               <button onClick={closeMove} style={{ background:'none', border:'none', cursor:'pointer', fontSize:24, color:'var(--color-text-tertiary)' }}>×</button>
             </div>
-            {moveStep==='form' && (
+            {moveStep==='form'&&(
               <>
                 <Field label="From location">
                   <select value={moveFrom} onChange={e=>{setMoveFrom(e.target.value);setMoveQty('');}} style={{ width:'100%', padding:'9px 12px', borderRadius:'var(--radius-sm)', border:'1px solid var(--color-border)', background:'var(--color-bg)', color:'var(--color-text)', fontSize:15, fontFamily:'var(--font)' }}>
@@ -960,14 +1119,13 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
                   </select>
                 </Field>
                 <div style={{ background:'var(--color-bg-secondary)', borderRadius:'var(--radius-md)', padding:'10px 14px', marginBottom:14, fontSize:13 }}>
-                  {availableUnits.length===0?<span style={{ color:'var(--color-danger-text)' }}>No units in {fromLoc?.name}</span>:<span style={{ color:'var(--color-text-secondary)' }}><strong style={{ color:'var(--color-text)' }}>{availableUnits.length}</strong> units available in {fromLoc?.name}</span>}
+                  {availableUnits.length===0?<span style={{ color:'var(--color-danger-text)' }}>No units in {fromLoc?.name}</span>:<span><strong>{availableUnits.length}</strong> units available in {fromLoc?.name}</span>}
                 </div>
                 <Field label="How many to move?">
                   <div style={{ display:'flex', gap:8, marginBottom:8 }}>
                     {[1,2,3,4,5].filter(n=>n<=availableUnits.length).map(n=><button key={n} onClick={()=>setMoveQty(String(n))} style={{ flex:1, padding:'10px', borderRadius:'var(--radius-md)', border:moveQty===String(n)?'none':'1px solid var(--color-border)', background:moveQty===String(n)?'#1a1a1a':'var(--color-bg-secondary)', color:moveQty===String(n)?'#fff':'var(--color-text)', fontWeight:700, cursor:'pointer', fontFamily:'var(--font)' }}>{n}</button>)}
                   </div>
                   <input value={moveQty} onChange={e=>setMoveQty(e.target.value)} type="number" min="1" max={availableUnits.length} placeholder={`Max ${availableUnits.length}`} style={{ textAlign:'center', fontWeight:600, fontSize:16 }} />
-                  {qty>availableUnits.length&&availableUnits.length>0&&<div style={{ fontSize:12, color:'var(--color-danger-text)', marginTop:6, textAlign:'center' }}>Only {availableUnits.length} available</div>}
                 </Field>
                 <Field label="To location">
                   <select value={moveTo} onChange={e=>setMoveTo(e.target.value)} style={{ width:'100%', padding:'9px 12px', borderRadius:'var(--radius-sm)', border:'1px solid var(--color-border)', background:'var(--color-bg)', color:'var(--color-text)', fontSize:15, fontFamily:'var(--font)' }}>
@@ -978,7 +1136,7 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
                 <button onClick={()=>canMove&&setMoveStep('confirm')} disabled={!canMove} style={{ ...btnP, width:'100%', opacity:canMove?1:0.4 }}>Review move →</button>
               </>
             )}
-            {moveStep==='confirm' && (
+            {moveStep==='confirm'&&(
               <>
                 <div style={{ background:'var(--color-bg-secondary)', borderRadius:'var(--radius-lg)', padding:'16px', marginBottom:20 }}>
                   <div style={{ fontSize:15, fontWeight:700, marginBottom:4 }}>{movingItem.name}</div>
@@ -1022,7 +1180,7 @@ function DrugDetailView({ libraryId, library, stock, locations, categories, navi
   const sorted = [...active].sort((a, b) => {
     if (a.expiration==='NA'&&b.expiration==='NA') return 0;
     if (a.expiration==='NA') return 1; if (b.expiration==='NA') return -1;
-    const da=parseExp(a.expiration), db=parseExp(b.expiration);
+    const da=parseExp(a.expiration),db=parseExp(b.expiration);
     if (!da&&!db) return 0; if (!da) return 1; if (!db) return -1; return da-db;
   });
   return (
@@ -1268,9 +1426,9 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
         }
       />
       <div style={{ padding:'0 20px' }}>
-        {!isEdit && !scanned && (
+        {!isEdit&&!scanned&&(
           <div style={{ marginBottom:16 }}>
-            {!scanning ? (
+            {!scanning?(
               <SmartCamera
                 onBarcodeResult={async barcode => {
                   setScanning(true); setScanError(null);
@@ -1294,14 +1452,14 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
                   setScanning(false);
                 }}
               />
-            ) : (
+            ):(
               <div style={{ textAlign:'center', padding:'2rem' }}><Spinner/><div style={{ fontSize:13, color:'var(--color-text-secondary)', marginTop:16 }}>Looking up...</div></div>
             )}
             {scanError&&<div style={{ fontSize:12, color:'var(--color-danger-text)', marginTop:8, textAlign:'center' }}>{scanError}</div>}
           </div>
         )}
         {scanned&&<div style={{ background:'var(--color-success-bg)', color:'var(--color-success-text)', border:'1px solid var(--color-success-border)', padding:'10px 14px', borderRadius:'var(--radius-md)', marginBottom:16, fontSize:13, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <span>✓ Label scanned — review below</span>
+          <span>✓ Scanned — review below</span>
           <button onClick={()=>{setScanned(false);setForm(f=>({...f,name:'',packagingType:'vial',unit:'',size:'',notes:''}));}} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--color-success-text)', fontSize:12, fontFamily:'var(--font)', textDecoration:'underline' }}>Rescan</button>
         </div>}
         <div style={{ display:'flex', gap:14, marginBottom:16, alignItems:'center' }}>
@@ -1318,7 +1476,7 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
           </div>
         </Field>
         <PackagingSelector value={form.packagingType} onChange={v=>setForm(f=>({...f,packagingType:v}))} />
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:0 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
           <Field label="Unit"><input value={form.unit} onChange={set('unit')} placeholder="mL, mg, tablet..." /></Field>
           <Field label="Size / gauge"><input value={form.size} onChange={set('size')} placeholder="28fr, Large, 18ga..." /></Field>
         </div>
@@ -1330,7 +1488,7 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
   );
 }
 
-function QuickReceiveView({ library, stock, locations, categories, navigate, onSaveStock, onSaveLibrary }) {
+function QuickReceiveView({ library, stock, locations, categories, navigate, onSaveStock, onAppendStock, onSaveLibrary }) {
   const [phase, setPhase]                   = useState('camera');
   const [scanResult, setScanResult]         = useState(null);
   const [matchedItem, setMatchedItem]       = useState(null);
@@ -1351,7 +1509,7 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
         const firstName = ndcData.genericName?.toLowerCase().split(' ')[0];
         if (firstName) matched = library.find(d => d.name?.toLowerCase().includes(firstName));
       }
-      setScanResult({ matchedName: ndcData.found?ndcData.name:matched?.name||'Unknown item', barcode, expiration:null, lot:null, matchedId:matched?.id||null, fromBarcode:true, packager:ndcData.packager, dosageForm:ndcData.dosageForm, route:ndcData.route, ndcFound:ndcData.found });
+      setScanResult({ matchedName:ndcData.found?ndcData.name:matched?.name||'Unknown item', barcode, expiration:null, lot:null, matchedId:matched?.id||null, fromBarcode:true, packager:ndcData.packager, dosageForm:ndcData.dosageForm, route:ndcData.route, ndcFound:ndcData.found });
       setMatchedItem(matched||null);
       setPhase('location');
     } catch(e) { alert('Lookup failed: '+e.message); setPhase('camera'); }
@@ -1369,9 +1527,13 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
 
   function handleCountNext() { const n=parseInt(count); if(!n||n<1)return; setExpirations(Array(n).fill(scanResult?.expiration||'')); setPhase('expirations'); }
 
-  function handleSave() {
+  async function handleSave() {
     const newEntries = expirations.map(exp=>({ id:uid(), libraryId:matchedItem.id, locationId:selectedLocation, expiration:exp||'NA', status:'active', addedAt:new Date().toISOString(), lot:scanResult?.lot||'', barcode:scanResult?.barcode||'' }));
-    onSaveStock([...stock,...newEntries]);
+    if (onAppendStock) {
+      await onAppendStock(newEntries);
+    } else {
+      onSaveStock([...stock,...newEntries]);
+    }
     setSessionCount(c=>c+parseInt(count));
     setPhase('camera');
     setScanResult(null); setMatchedItem(null); setCapturedPhoto(null); setCount(''); setExpirations([]);
@@ -1405,7 +1567,7 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
     <div>
       <TopBar title="Quick Receive" onBack={reset} />
       <div style={{ padding:'0 20px' }}>
-        {matchedItem ? (
+        {matchedItem?(
           <div style={{ background:'var(--color-success-bg)', border:'1px solid var(--color-success-border)', borderRadius:'var(--radius-lg)', padding:'12px 14px', marginBottom:16, display:'flex', alignItems:'center', gap:12 }}>
             {matchedItem.profilePhoto&&<img src={`data:image/jpeg;base64,${matchedItem.profilePhoto}`} alt="" style={{ width:44, height:44, objectFit:'cover', borderRadius:8, flexShrink:0 }}/>}
             <div>
@@ -1415,19 +1577,19 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
               {scanResult?.expiration&&<div style={{ fontSize:12, color:'var(--color-text-secondary)', marginTop:2 }}>Exp: {scanResult.expiration}</div>}
             </div>
           </div>
-        ) : (
+        ):(
           <div style={{ background:'var(--color-warning-bg)', border:'1px solid var(--color-warning-border)', borderRadius:'var(--radius-lg)', padding:'12px 14px', marginBottom:16 }}>
             <div style={{ fontSize:12, color:'var(--color-warning-text)', fontWeight:700, marginBottom:4 }}>{scanResult?.fromBarcode?'📊 Identified — not in library':'⚠ Not in library'}</div>
             <div style={{ fontSize:15, fontWeight:700 }}>{scanResult?.matchedName||'Unknown'}</div>
             {scanResult?.fromBarcode&&<div style={{ fontSize:12, color:'var(--color-text-secondary)', marginTop:4 }}>{[scanResult.dosageForm,scanResult.route,scanResult.packager].filter(Boolean).join(' · ')}</div>}
           </div>
         )}
-        {!matchedItem ? (
+        {!matchedItem?(
           <>
             <button onClick={()=>navigate('additem',{scanData:{name:scanResult?.matchedName||'',notes:[scanResult?.route,scanResult?.dosageForm].filter(Boolean).join(', '),barcode:scanResult?.barcode||''},capturedPhoto})} style={{ ...btnP, width:'100%', marginBottom:10 }}>Add to library</button>
             <button onClick={reset} style={{ ...btnS, width:'100%' }}>Skip — scan next</button>
           </>
-        ) : (
+        ):(
           <>
             <div style={{ fontSize:13, fontWeight:600, marginBottom:10 }}>Where is this going?</div>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:16, maxHeight:280, overflowY:'auto' }}>
@@ -1541,8 +1703,8 @@ function SettingsView({ library, stock, locations, categories, templates, naviga
               <div key={loc.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'11px 14px', background:'var(--color-bg)', border:'1px solid var(--color-border)', borderRadius:'var(--radius-lg)', marginBottom:8 }}>
                 <span style={{ fontSize:20 }}>{loc.icon}</span>
                 <span style={{ flex:1, fontWeight:500, fontSize:14 }}>{loc.name}</span>
-                <button onClick={() => { const name = prompt('Rename:', loc.name); if (name) onSaveLocations(locations.map(l => l.id === loc.id ? { ...l, name } : l)); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-tertiary)', fontSize: 13, fontFamily: 'var(--font)' }}>Rename</button>
-<button onClick={() => { if (!window.confirm(`Delete ${loc.name}? Stock assigned here will move to Supply Room.`)) return; const updated = locations.filter(l => l.id !== loc.id); onSaveLocations(updated); onSaveStock(stock.map(s => s.locationId === loc.id ? { ...s, locationId: 'supply-room' } : s)); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-danger-text)', fontSize: 13, fontFamily: 'var(--font)' }}>Delete</button>
+                <button onClick={()=>{const name=prompt('Rename:',loc.name);if(name)onSaveLocations(locations.map(l=>l.id===loc.id?{...l,name}:l));}} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--color-text-tertiary)', fontSize:13, fontFamily:'var(--font)' }}>Rename</button>
+                <button onClick={()=>{ if(!window.confirm(`Delete ${loc.name}? Stock moves to Supply Room.`))return; onSaveLocations(locations.filter(l=>l.id!==loc.id)); onSaveStock(stock.map(s=>s.locationId===loc.id?{...s,locationId:'supply-room'}:s)); }} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--color-danger-text)', fontSize:13, fontFamily:'var(--font)' }}>Delete</button>
               </div>
             ))}
             <button onClick={()=>{const name=prompt('Location name:');if(!name)return;const icon=prompt('Icon (emoji):')||'📦';onSaveLocations([...locations,{id:uid(),name,icon,type:'bag',templateId:null}]);}} style={{ ...btnS, width:'100%', marginTop:8 }}>+ Add location</button>
@@ -1696,11 +1858,20 @@ export default function App() {
   }
 
   const saveLibrary    = data => persist(setLibrary,    data, api.saveLibrary);
-  const saveStock      = data => persist(setStock,      data, api.saveStock);
+  const saveStock      = data => persist(setStock,      data, d => api.post('stock', { replace: d }));
   const saveLocations  = data => persist(setLocations,  data, api.saveLocations);
   const saveCategories = data => persist(setCategories, data, api.saveCategories);
   const saveTemplates  = data => persist(setTemplates,  data, api.saveTemplates);
   const saveMap        = data => persist(setMapData,    data, api.saveMap);
+
+  const appendStock = async (entries) => {
+    try {
+      await api.post('stock', { entries });
+      const updated = await api.getStock();
+      setStock(updated || []);
+      setSaveStatus('Saved ✓'); setTimeout(() => setSaveStatus(''), 2000);
+    } catch { setSaveStatus('Save failed'); }
+  };
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', flexDirection:'column', gap:16 }}>
@@ -1712,7 +1883,7 @@ export default function App() {
   const sharedProps = { library, stock, locations, categories, templates, navigate };
 
   return (
-    <div style={{ width:'100%', maxWidth: isDesktop&&view==='map'?'100%':680, paddingBottom:72, background:'var(--color-bg)', minHeight:'100vh', margin:'0 auto', boxShadow: isDesktop?'0 0 0 1px rgba(0,0,0,0.06)':undefined }}>
+    <div style={{ width:'100%', maxWidth:isDesktop&&view==='map'?'100%':680, paddingBottom:72, background:'var(--color-bg)', minHeight:'100vh', margin:'0 auto', boxShadow:isDesktop?'0 0 0 1px rgba(0,0,0,0.06)':undefined }}>
       {saveStatus&&(
         <div style={{ position:'fixed', top:16, left:'50%', transform:'translateX(-50%)', background:'var(--color-text)', color:'var(--color-bg)', padding:'6px 18px', borderRadius:20, fontSize:12, fontWeight:500, zIndex:400, whiteSpace:'nowrap', boxShadow:'0 2px 8px rgba(0,0,0,0.2)' }}>
           {saveStatus}
@@ -1729,9 +1900,9 @@ export default function App() {
       {view==='addstock'       && <AddStockView {...sharedProps} libraryId={params.libraryId} locationId={params.locationId} onSaveStock={saveStock} />}
       {view==='additem'        && <AddItemView {...sharedProps} libraryId={null} scanData={params.scanData} capturedPhoto={params.capturedPhoto} onSaveLibrary={saveLibrary} onSaveStock={saveStock} />}
       {view==='edititem'       && <AddItemView {...sharedProps} libraryId={params.libraryId} scanData={null} capturedPhoto={null} onSaveLibrary={saveLibrary} onSaveStock={saveStock} />}
-      {view==='quickreceive'   && <QuickReceiveView {...sharedProps} onSaveStock={saveStock} onSaveLibrary={saveLibrary} />}
+      {view==='quickreceive'   && <QuickReceiveView {...sharedProps} onSaveStock={saveStock} onAppendStock={appendStock} onSaveLibrary={saveLibrary} />}
       {view==='orderreport'    && <OrderReportView {...sharedProps} />}
-      {view=== 'settings' && <SettingsView {...sharedProps} onSaveLocations={saveLocations} onSaveCategories={saveCategories} onSaveTemplates={saveTemplates} onSaveStock={saveStock} />}
+      {view==='settings'       && <SettingsView {...sharedProps} onSaveLocations={saveLocations} onSaveCategories={saveCategories} onSaveTemplates={saveTemplates} onSaveStock={saveStock} />}
       {view==='edittemplate'   && <TemplateEditorView {...sharedProps} templateId={params.templateId} onSaveTemplates={saveTemplates} />}
 
       <BottomNav view={view} navigate={navigate} isDesktop={isDesktop} />
