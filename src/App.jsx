@@ -1550,7 +1550,7 @@ export default function App() {
 
   useEffect(()=>{
     Promise.all([api.getLibrary(),api.getStock(),api.getLocations(),api.getCategories(),api.getTemplates(),api.getMap()])
-      .then(([lib,stk,locs,cats,tmpls,map])=>{setLibrary(lib||[]);setStock(stk||[]);setLocations(locs?.length?locs:DEFAULT_LOCATIONS);setCategories(cats?.length?cats:DEFAULT_CATEGORIES);setTemplates(tmpls||[]);setMapData(map||{rooms:[],pins:[],lines:[],doors:[],bgImage:null});setLoading(false);})
+      .then(([lib,stk,locs,cats,tmpls,map])=>{setLibrary(Array.isArray(lib)?lib:[]);setStock(Array.isArray(stk)?stk:[]);setLocations(Array.isArray(locs)&&locs.length?locs:DEFAULT_LOCATIONS);setCategories(Array.isArray(cats)&&cats.length?cats:DEFAULT_CATEGORIES);setTemplates(Array.isArray(tmpls)?tmpls:[]);setMapData(map&&!Array.isArray(map)&&typeof map==='object'&&'rooms'in map?map:{rooms:[],pins:[],lines:[],doors:[],bgImage:null});setLoading(false);})
       .catch(()=>{setLocations(DEFAULT_LOCATIONS);setCategories(DEFAULT_CATEGORIES);setLoading(false);});
   },[]);
 
