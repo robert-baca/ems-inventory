@@ -291,6 +291,117 @@ function SmartCamera({ onPhotoCapture, onManual }) {
   );
 }
 
+function LiveScanner({ library, onConfirm, onManual }) {
+  const videoRef    = useRef(null);
+  const streamRef   = useRef(null);
+  const prevDataRef = useRef(null);
+  const stableRef   = useRef(null);
+  const readingRef  = useRef(false);
+  const [ready,    setReady]   = useState(false);
+  const [err,      setErr]     = useState(null);
+  const [status,   setStatus]  = useState('aim'); // aim | stable | reading
+  const [result,   setResult]  = useState(null);
+  const [captured, setCaptured]= useState(null);
+
+  useEffect(() => {
+    let active = true;
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } })
+      .then(stream => {
+        if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play().then(() => setReady(true)).catch(() => {}); }
+      }).catch(() => setErr('Camera unavailable — check permissions'));
+    return () => { active = false; streamRef.current?.getTracks().forEach(t => t.stop()); if (stableRef.current) clearTimeout(stableRef.current); };
+  }, []);
+
+  useEffect(() => {
+    if (!ready || result) return;
+    const dc = document.createElement('canvas'); dc.width = 160; dc.height = 90;
+    const dctx = dc.getContext('2d');
+
+    async function captureAndScan() {
+      if (readingRef.current) return;
+      readingRef.current = true;
+      setStatus('reading');
+      const video = videoRef.current;
+      if (!video) { readingRef.current = false; return; }
+      const c = document.createElement('canvas');
+      c.width = video.videoWidth; c.height = video.videoHeight;
+      c.getContext('2d').drawImage(video, 0, 0);
+      const b64 = c.toDataURL('image/jpeg', 0.85).split(',')[1];
+      try {
+        const data = await api.quickscan(b64, library);
+        setCaptured(b64);
+        setResult(data);
+      } catch { setStatus('aim'); }
+      readingRef.current = false;
+    }
+
+    const interval = setInterval(() => {
+      if (readingRef.current) return;
+      const video = videoRef.current;
+      if (!video || video.readyState < 2) return;
+      dctx.drawImage(video, 0, 0, 160, 90);
+      const pixels = dctx.getImageData(0, 0, 160, 90).data;
+      let moving = false;
+      if (prevDataRef.current) {
+        let diff = 0;
+        for (let i = 0; i < pixels.length; i += 4)
+          diff += Math.abs(pixels[i]-prevDataRef.current[i]) + Math.abs(pixels[i+1]-prevDataRef.current[i+1]) + Math.abs(pixels[i+2]-prevDataRef.current[i+2]);
+        moving = diff / (160 * 90) > 15;
+      }
+      prevDataRef.current = new Uint8ClampedArray(pixels);
+      if (moving) {
+        if (stableRef.current) { clearTimeout(stableRef.current); stableRef.current = null; }
+        setStatus('aim');
+      } else if (!stableRef.current) {
+        setStatus('stable');
+        stableRef.current = setTimeout(() => { stableRef.current = null; captureAndScan(); }, 600);
+      }
+    }, 150);
+
+    return () => { clearInterval(interval); if (stableRef.current) { clearTimeout(stableRef.current); stableRef.current = null; } };
+  }, [ready, result, library]);
+
+  function confirm() { streamRef.current?.getTracks().forEach(t => t.stop()); onConfirm(result, captured); }
+  function rescan()  { setResult(null); setCaptured(null); setStatus('aim'); prevDataRef.current = null; }
+
+  if (err) return (
+    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--color-text-secondary)', fontSize: 13 }}>
+      {err}{onManual && <><br/><br/><button onClick={onManual} style={{ ...btnS, padding: '10px 20px' }}>Enter manually</button></>}
+    </div>
+  );
+
+  const hint = status === 'reading' ? '🤖 Reading...' : status === 'stable' ? '⏳ Hold steady...' : '🔍 Aim at the label';
+
+  return (
+    <div>
+      <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: '#000', minHeight: 320 }}>
+        <video ref={videoRef} style={{ width: '100%', display: 'block', maxHeight: 420, objectFit: 'cover' }} playsInline muted />
+        {ready && !result && (
+          <>
+            <div style={{ position: 'absolute', inset: '20% 10%', border: `2px solid ${status === 'stable' ? '#6ee7a0' : 'rgba(255,255,255,0.7)'}`, borderRadius: 10, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.4)', transition: 'border-color 0.2s' }} />
+            <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', fontSize: 13, color: '#fff', background: 'rgba(0,0,0,0.65)', padding: '6px 18px', borderRadius: 20, whiteSpace: 'nowrap' }}>{hint}</div>
+          </>
+        )}
+        {!ready && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>Starting camera...</span></div>}
+        {result && (
+          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(0,0,0,0.88)', padding: '16px 16px 20px' }}>
+            <div style={{ color: result.matchedId ? '#6ee7a0' : '#fbbf24', fontSize: 11, fontWeight: 700, marginBottom: 4 }}>{result.matchedId ? '✓ Found in library' : '⚠ Not in library'}</div>
+            <div style={{ color: '#fff', fontSize: 16, fontWeight: 700, marginBottom: result.expiration ? 4 : 12 }}>{result.matchedName || 'Unknown item'}</div>
+            {result.expiration && <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: 12, marginBottom: 12 }}>Exp: {result.expiration}</div>}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={confirm} style={{ flex: 2, padding: '11px', background: '#1d6b3a', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font)' }}>✓ That's it</button>
+              <button onClick={rescan}   style={{ flex: 1, padding: '11px', background: 'rgba(255,255,255,0.15)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font)' }}>↺ Rescan</button>
+            </div>
+          </div>
+        )}
+      </div>
+      {onManual && !result && <button onClick={onManual} style={{ ...btnS, width: '100%', marginTop: 10, fontSize: 13 }}>✏️ Enter manually</button>}
+    </div>
+  );
+}
+
 function MultiPhotoScanner({ onPhotosCapture, initialPhotos = [] }) {
   const videoRef  = useRef(null);
   const streamRef = useRef(null);
@@ -1193,7 +1304,7 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
   const [sessionCount,setSessionCount]=useState(0);
   const quick=[1,2,3,4,5,6];
 
-  async function handlePhoto(b64){setCapturedPhoto(b64);setPhase('scanning');try{const result=await api.quickscan(b64,library.filter(d=>d.status!=='inactive'));setScanResult(result);setMatchedItem(result.matchedId?library.find(d=>d.id===result.matchedId)||null:null);setPhase('location');}catch(e){alert('Scan error: '+e.message);setPhase('camera');}}
+  function handleScanConfirm(result, photo){setCapturedPhoto(photo);setScanResult(result);setMatchedItem(result.matchedId?library.find(d=>d.id===result.matchedId)||null:null);setPhase('location');}
   function handleCountNext(){const n=parseInt(count);if(!n||n<1)return;setExpirations(Array(n).fill(scanResult?.expiration||''));setPhase('expirations');}
   async function handleSave(){const newEntries=expirations.map(exp=>({id:uid(),libraryId:matchedItem.id,locationId:selectedLocation,expiration:exp||'NA',status:'active',addedAt:new Date().toISOString(),lot:scanResult?.lot||'',barcode:scanResult?.barcode||''}));if(onAppendStock){await onAppendStock(newEntries);}else{onSaveStock([...stock,...newEntries]);}setSessionCount(c=>c+parseInt(count));setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);}
   function reset(){setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);}
@@ -1206,13 +1317,10 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
         {sessionCount>0&&<span style={{fontSize:13,color:'var(--color-success-text)',fontWeight:600}}>{sessionCount} added</span>}
       </div>
       <div style={{padding:'0 20px'}}>
-        <div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'8px 14px',marginBottom:14,fontSize:12,color:'var(--color-text-secondary)',textAlign:'center'}}>Aim at the item label — AI will identify it</div>
-        <SmartCamera onPhotoCapture={handlePhoto} onManual={()=>{setScanResult({});setPhase('location');}}/>
+        <LiveScanner library={library.filter(d=>d.status!=='inactive')} onConfirm={handleScanConfirm} onManual={()=>{setScanResult({});setPhase('location');}}/>
       </div>
     </div>
   );
-
-  if(phase==='scanning')return(<div style={{padding:20,textAlign:'center',paddingTop:'8rem'}}><Spinner/><div style={{fontSize:16,fontWeight:600,marginTop:20,marginBottom:8}}>Identifying...</div><div style={{fontSize:13,color:'var(--color-text-secondary)'}}>Matching against your library</div></div>);
 
   if(phase==='location')return(
     <div>
