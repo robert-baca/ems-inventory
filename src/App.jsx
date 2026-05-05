@@ -1485,9 +1485,21 @@ function OrderReportView({ library, stock, categories, navigate }) {
   const belowPar=allItems.filter(i=>i.usable<i.par);
   function exportCSV(){const rows=[['Category','Item','Station Par','Total Stock','Expired','Expiring This Month','Usable Stock','Order Qty','Status']];report.forEach(({category,items})=>{items.forEach(({item,total,expired,expiringSoon,usable,par,needed})=>{rows.push([category.name,item.name,par,total,expired,expiringSoon,usable,needed,needed>0?'ORDER':'OK']);});});const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`ems-order-report-${new Date().toISOString().slice(0,10)}.csv`;a.click();}
   const vendorLabel=vendorFilter==='mckesson'?'McKesson':vendorFilter==='boundtree'?'Bound Tree':'All';
+  function exportVendorCSV(){
+    const rows=[['Vendor','Item','Category','Total Stock','Expired','Expiring This Month','Usable Stock','Station Par','Need to Order','Status']];
+    (vendorItems||[]).forEach(({item,total,expired,expiringSoon,usable,par,needed})=>{
+      const cat=categories.find(c=>c.id===item.category);
+      rows.push([vendorLabel,item.name,cat?.name||'',total,expired,expiringSoon,usable,par,needed,needed>0?'ORDER':expired>0?'EXPIRED':expiringSoon>0?'EXP SOON':'OK']);
+    });
+    const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+    a.download=`${vendorFilter}-report-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+  }
   return(
     <div style={{paddingBottom:40}}>
-      <TopBar title="Order Report" subtitle={date} onBack={()=>navigate(-1)} right={vendorFilter==='all'?<button onClick={exportCSV} style={{...btnS,padding:'7px 14px',fontSize:12}}>Export CSV</button>:null}/>
+      <TopBar title="Order Report" subtitle={date} onBack={()=>navigate(-1)} right={<button onClick={vendorFilter==='all'?exportCSV:exportVendorCSV} style={{...btnS,padding:'7px 14px',fontSize:12}}>Export CSV</button>}/>
       <div style={{padding:'0 20px'}}>
         <div style={{display:'flex',gap:0,marginBottom:16,borderBottom:'1px solid var(--color-border)'}}>
           {[['all','All'],['mckesson','McKesson'],['boundtree','Bound Tree']].map(([id,label])=>(
