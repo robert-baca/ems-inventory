@@ -1500,20 +1500,49 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
   const activeLib = library.filter(d => d.status !== 'inactive');
   const quick = [1,2,3,4,5,6];
 
-  async function handleBarcode(barcode) {
-    setPhase('scanning');
-    try {
-      const ndcData = await api.ndcLookup(barcode);
-      let matched = library.find(d => d.barcode === barcode);
-      if (!matched && ndcData.found) {
-        const firstName = ndcData.genericName?.toLowerCase().split(' ')[0];
-        if (firstName) matched = library.find(d => d.name?.toLowerCase().includes(firstName));
+ async function handleBarcode(barcode) {
+  setPhase('scanning');
+  try {
+    let ndcData = await api.ndcLookup(barcode);
+
+    // If not found by barcode, try matching against library first
+    // then try common drug name lookups
+    if (!ndcData.found) {
+      const commonNames = ['narcan','naloxone','epinephrine','atropine','adenosine','amiodarone','aspirin','dextrose','diphenhydramine','fentanyl','furosemide','glucagon','lorazepam','magnesium','metoprolol','midazolam','morphine','nitroglycerin','ondansetron','succinylcholine','zofran','benadryl'];
+      for (const name of commonNames) {
+        if (barcode.toLowerCase().includes(name)) {
+          ndcData = await fetch(`/api/ndc?name=${encodeURIComponent(name)}`).then(r=>r.json());
+          if (ndcData.found) break;
+        }
       }
-      setScanResult({ matchedName:ndcData.found?ndcData.name:matched?.name||'Unknown item', barcode, expiration:null, lot:null, matchedId:matched?.id||null, fromBarcode:true, packager:ndcData.packager, dosageForm:ndcData.dosageForm, route:ndcData.route, ndcFound:ndcData.found });
-      setMatchedItem(matched||null);
-      setPhase('location');
-    } catch(e) { alert('Lookup failed: '+e.message); setPhase('camera'); }
-  }
+    }
+
+    let matched = library.find(d => d.barcode === barcode);
+    if (!matched && ndcData.found) {
+      const searchTerms = [
+        ndcData.genericName?.toLowerCase().split(' ')[0],
+        ndcData.brandName?.toLowerCase().split(' ')[0],
+      ].filter(Boolean);
+      for (const term of searchTerms) {
+        matched = library.find(d => d.name?.toLowerCase().includes(term));
+        if (matched) break;
+      }
+    }
+
+    setScanResult({
+      matchedName: ndcData.found ? ndcData.name : matched?.name || 'Unknown item',
+      barcode, expiration: null, lot: null,
+      matchedId: matched?.id || null,
+      fromBarcode: true,
+      packager:   ndcData.packager,
+      dosageForm: ndcData.dosageForm,
+      route:      ndcData.route,
+      ndcFound:   ndcData.found,
+    });
+    setMatchedItem(matched || null);
+    setPhase('location');
+  } catch(e) { alert('Lookup failed: '+e.message); setPhase('camera'); }
+}
 
   async function handlePhoto(b64) {
     setCapturedPhoto(b64); setPhase('scanning');
