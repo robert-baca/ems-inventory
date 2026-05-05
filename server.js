@@ -82,6 +82,55 @@ app.post('/api/scan', async (req, res) => {
   }
 });
 
+app.post('/api/quickscan', async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set in .env' });
+  try {
+    const { image, library = [] } = req.body;
+    const libraryNames = library.map(d => `${d.id}|${d.name}`).join('\n');
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 512,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: image } },
+            {
+              type: 'text',
+              text: `You are an EMS inventory scanner. Read this medication or supply label.
+
+Library items (id|name):
+${libraryNames || '(empty)'}
+
+Return ONLY a valid JSON object, no markdown:
+{
+  "matchedId": "library id of best match or null",
+  "matchedName": "item name you read from the label",
+  "expiration": "YYYY-MM or YYYY-MM-DD from label, null if not found",
+  "lot": "lot number as string or null",
+  "barcode": "NDC or barcode digits or null"
+}`
+            }
+          ]
+        }]
+      })
+    });
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    const text = (data.content || []).map(c => c.text || '').join('');
+    res.json(JSON.parse(text.replace(/```json|```/g, '').trim()));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('*', (req, res) => {
   const p = path.join(__dirname, 'dist', 'index.html');
   fs.existsSync(p) ? res.sendFile(p) : res.send('Run npm run dev');
