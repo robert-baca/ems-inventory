@@ -1254,10 +1254,11 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
   const [capturedPhotos,setCapturedPhotos]=useState([]);
   const [scanned,setScanned]=useState(!!(scanData&&Object.values(scanData).some(v=>v)));
   const [saving,setSaving]=useState(false);
+  const [addStockPrompt,setAddStockPrompt]=useState(null);
   const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
   const isEdit=!!existing;
 
-  async function handleSave(){setSaving(true);const id=existing?.id||uid();const updated={id,...form,profilePhoto:photo,stationPar:parseInt(form.stationPar)||0,addedAt:existing?.addedAt||new Date().toISOString()};await onSaveLibrary(existing?library.map(d=>d.id===id?updated:d):[updated,...library]);setSaving(false);navigate('library');}
+  async function handleSave(){setSaving(true);const id=existing?.id||uid();const updated={id,...form,profilePhoto:photo,stationPar:parseInt(form.stationPar)||0,addedAt:existing?.addedAt||new Date().toISOString()};await onSaveLibrary(existing?library.map(d=>d.id===id?updated:d):[updated,...library]);setSaving(false);if(!existing){setAddStockPrompt(id);}else{navigate('library');}}
   async function handlePhotoChange(e){const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=async ev=>setPhoto(await resizeImage(ev.target.result.split(',')[1],400));reader.readAsDataURL(file);}
 
   return(
@@ -1338,6 +1339,17 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
         <Field label="Notes"><input value={form.notes} onChange={set('notes')} placeholder="Route, storage, controlled substance schedule..."/></Field>
         <button onClick={handleSave} disabled={!form.name.trim()||saving} style={{...btnP,width:'100%',marginTop:8,opacity:form.name.trim()&&!saving?1:0.45}}>{saving?'Saving...':isEdit?'Save changes':'Save to library'}</button>
       </div>
+      {addStockPrompt&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:200,padding:'20px'}}>
+          <div style={{background:'var(--color-bg)',borderRadius:'var(--radius-lg)',padding:'28px 24px',width:'100%',maxWidth:360,textAlign:'center'}}>
+            <div style={{fontSize:36,marginBottom:10}}>✓</div>
+            <div style={{fontSize:17,fontWeight:700,marginBottom:8}}>Item saved!</div>
+            <div style={{fontSize:14,color:'var(--color-text-secondary)',marginBottom:24}}>Do you want to add stock for this item now?</div>
+            <button onClick={()=>navigate('addstock',{libraryId:addStockPrompt})} style={{...btnP,width:'100%',marginBottom:10}}>Yes, add stock</button>
+            <button onClick={()=>navigate('library')} style={{...btnS,width:'100%'}}>No, done</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
