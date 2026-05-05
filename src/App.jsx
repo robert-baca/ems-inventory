@@ -1497,344 +1497,225 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
   const [count, setCount]                   = useState('');
   const [expirations, setExpirations]       = useState([]);
   const [sessionCount, setSessionCount]     = useState(0);
+  const [autoLabelScan, setAutoLabelScan]   = useState(false);
   const activeLib = library.filter(d => d.status !== 'inactive');
   const quick = [1,2,3,4,5,6];
 
   async function handleBarcode(barcode) {
-  // DEBUG — show exactly what was scanned
+    setPhase('scanning');
+    try {
+      const ndcData = await api.ndcLookup(barcode);
 
-  setPhase('scanning');
-  try {
-    const ndcData = await api.ndcLookup(barcode);
-
-    // If not found by barcode, try matching against library first
-    // then try common drug name lookups
-    if (!ndcData.found) {
-      const commonNames = ['narcan','naloxone','epinephrine','atropine','adenosine','amiodarone','aspirin','dextrose','diphenhydramine','fentanyl','furosemide','glucagon','lorazepam','magnesium','metoprolol','midazolam','morphine','nitroglycerin','ondansetron','succinylcholine','zofran','benadryl'];
-      for (const name of commonNames) {
-        if (barcode.toLowerCase().includes(name)) {
-          ndcData = await fetch(`/api/ndc?name=${encodeURIComponent(name)}`).then(r=>r.json());
-          if (ndcData.found) break;
+      if (ndcData.found) {
+        let matched = library.find(d => d.barcode === barcode);
+        if (!matched) {
+          const searchTerms = [
+            ndcData.genericName?.toLowerCase().split(' ')[0],
+            ndcData.brandName?.toLowerCase().split(' ')[0],
+          ].filter(Boolean);
+          for (const term of searchTerms) {
+            matched = library.find(d => d.name?.toLowerCase().includes(term));
+            if (matched) break;
+          }
         }
+        setScanResult({
+          matchedName: ndcData.name,
+          barcode, expiration: null, lot: null,
+          matchedId: matched?.id || null,
+          fromBarcode: true,
+          packager:   ndcData.packager,
+          dosageForm: ndcData.dosageForm,
+          route:      ndcData.route,
+          ndcFound:   true,
+        });
+        setMatchedItem(matched || null);
+        setPhase('location');
+        return;
       }
-    }
 
-    let matched = library.find(d => d.barcode === barcode);
-    if (!matched && ndcData.found) {
-      const searchTerms = [
-        ndcData.genericName?.toLowerCase().split(' ')[0],
-        ndcData.brandName?.toLowerCase().split(' ')[0],
-      ].filter(Boolean);
-      for (const term of searchTerms) {
-        matched = library.find(d => d.name?.toLowerCase().includes(term));
-        if (matched) break;
+      // Not in FDA — check library directly by barcode
+      const libraryMatch = library.find(d => d.barcode === barcode);
+      if (libraryMatch) {
+        setScanResult({ matchedName: libraryMatch.name, barcode, matchedId: libraryMatch.id, fromBarcode: true, ndcFound: false });
+        setMatchedItem(libraryMatch);
+        setPhase('location');
+        return;
       }
-    }
 
-    setScanResult({
-      matchedName: ndcData.found ? ndcData.name : matched?.name || 'Unknown item',
-      barcode, expiration: null, lot: null,
-      matchedId: matched?.id || null,
-      fromBarcode: true,
-      packager:   ndcData.packager,
-      dosageForm: ndcData.dosageForm,
-      route:      ndcData.route,
-      ndcFound:   ndcData.found,
-    });
-    setMatchedItem(matched || null);
-    setPhase('location');
-  } catch(e) { alert('Lookup failed: '+e.message); setPhase('camera'); }
-}
+      // Not found anywhere — prompt label scan
+      setPhase('camera');
+      setAutoLabelScan(true);
+
+    } catch(e) { alert('Lookup failed: ' + e.message); setPhase('camera'); }
+  }
 
   async function handlePhoto(b64) {
     setCapturedPhoto(b64); setPhase('scanning');
     try {
-      const result = await api.quickscan(b64, acveLib);
+      const result = await api.quickscan(b64, activeLib);
       setScanResult(result);
-      setMatchedItem(result.matchedId?library.find(d=>d.id===result.matchedId)||null:null);
+      setMatchedItem(result.matchedId ? library.find(d => d.id === result.matchedId) || null : null);
       setPhase('location');
-    } catch(e) { alert('Scan error: '+e.message); setPhase('camera'); }
+    } catch(e) { alert('Scan error: ' + e.message); setPhase('camera'); }
   }
 
-  function handleCountNext() { const n=parseInt(count); if(!n||n<1)return; setExpirations(Array(n).fill(scanResult?.expiration||'')); setPhase('expirations'); }
+  function handleCountNext() {
+    const n = parseInt(count); if (!n || n < 1) return;
+    setExpirations(Array(n).fill(scanResult?.expiration || ''));
+    setPhase('expirations');
+  }
 
   async function handleSave() {
-    const newEntries = expirations.map(exp=>({ id:uid(), libraryId:matchedItem.id, locationId:selectedLocation, expiration:exp||'NA', status:'active', addedAt:new Date().toISOString(), lot:scanResult?.lot||'', barcode:scanResult?.barcode||'' }));
+    const newEntries = expirations.map(exp => ({
+      id: uid(), libraryId: matchedItem.id,
+      locationId: selectedLocation,
+      expiration: exp || 'NA', status: 'active',
+      addedAt: new Date().toISOString(),
+      lot: scanResult?.lot || '',
+      barcode: scanResult?.barcode || '',
+    }));
     if (onAppendStock) {
       await onAppendStock(newEntries);
     } else {
-      onSaveStock([...stock,...newEntries]);
+      onSaveStock([...stock, ...newEntries]);
     }
-    setSessionCount(c=>c+parseInt(count));
+    setSessionCount(c => c + parseInt(count));
+    setAutoLabelScan(false);
     setPhase('camera');
     setScanResult(null); setMatchedItem(null); setCapturedPhoto(null); setCount(''); setExpirations([]);
   }
 
-  function reset() { setPhase('camera'); setScanResult(null); setMatchedItem(null); setCapturedPhoto(null); setCount(''); setExpirations([]); }
+  function reset() {
+    setPhase('camera'); setScanResult(null); setMatchedItem(null);
+    setCapturedPhoto(null); setCount(''); setExpirations([]);
+    setAutoLabelScan(false);
+  }
 
-  if (phase==='camera') return (
+  if (phase === 'camera') return (
     <div>
       <div style={{ display:'flex', alignItems:'center', padding:'16px 20px 0', marginBottom:12 }}>
-        <button onClick={()=>navigate(-1)} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--color-text-secondary)', fontSize:14, fontFamily:'var(--font)' }}>← Back</button>
+        <button onClick={() => navigate(-1)} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--color-text-secondary)', fontSize:14, fontFamily:'var(--font)' }}>← Back</button>
         <span style={{ flex:1, textAlign:'center', fontSize:17, fontWeight:700 }}>Quick Receive</span>
-        {sessionCount>0&&<span style={{ fontSize:13, color:'var(--color-success-text)', fontWeight:600 }}>{sessionCount} added</span>}
+        {sessionCount > 0 && <span style={{ fontSize:13, color:'var(--color-success-text)', fontWeight:600 }}>{sessionCount} added</span>}
       </div>
       <div style={{ padding:'0 20px' }}>
-        <div style={{ background:'var(--color-bg-secondary)', borderRadius:'var(--radius-md)', padding:'8px 14px', marginBottom:14, fontSize:12, color:'var(--color-text-secondary)', textAlign:'center' }}>Barcode: instant · Label: AI reads everything</div>
-        <SmartCamera onBarcodeResult={handleBarcode} onPhotoCapture={handlePhoto} onManual={()=>{setScanResult({});setPhase('location');}} />
+        {autoLabelScan && (
+          <div style={{ background:'var(--color-warning-bg)', border:'1px solid var(--color-warning-border)', borderRadius:'var(--radius-md)', padding:'10px 14px', marginBottom:12, fontSize:12, color:'var(--color-warning-text)', textAlign:'center' }}>
+            ⚠ Barcode not in FDA database — switch to <strong>📷 Scan Label</strong> to read this item
+          </div>
+        )}
+        <div style={{ background:'var(--color-bg-secondary)', borderRadius:'var(--radius-md)', padding:'8px 14px', marginBottom:14, fontSize:12, color:'var(--color-text-secondary)', textAlign:'center' }}>
+          Barcode: instant · Label: AI reads everything
+        </div>
+        <SmartCamera
+          onBarcodeResult={handleBarcode}
+          onPhotoCapture={handlePhoto}
+          onManual={() => { setScanResult({}); setPhase('location'); }}
+        />
       </div>
     </div>
   );
 
-  if (phase==='scanning') return (
+  if (phase === 'scanning') return (
     <div style={{ padding:20, textAlign:'center', paddingTop:'8rem' }}>
-      <Spinner/>
+      <Spinner />
       <div style={{ fontSize:16, fontWeight:600, marginTop:20, marginBottom:8 }}>Identifying...</div>
       <div style={{ fontSize:13, color:'var(--color-text-secondary)' }}>Matching against your library</div>
     </div>
   );
 
-  if (phase==='location') return (
+  if (phase === 'location') return (
     <div>
       <TopBar title="Quick Receive" onBack={reset} />
       <div style={{ padding:'0 20px' }}>
-        {matchedItem?(
+        {matchedItem ? (
           <div style={{ background:'var(--color-success-bg)', border:'1px solid var(--color-success-border)', borderRadius:'var(--radius-lg)', padding:'12px 14px', marginBottom:16, display:'flex', alignItems:'center', gap:12 }}>
-            {matchedItem.profilePhoto&&<img src={`data:image/jpeg;base64,${matchedItem.profilePhoto}`} alt="" style={{ width:44, height:44, objectFit:'cover', borderRadius:8, flexShrink:0 }}/>}
+            {matchedItem.profilePhoto && <img src={`data:image/jpeg;base64,${matchedItem.profilePhoto}`} alt="" style={{ width:44, height:44, objectFit:'cover', borderRadius:8, flexShrink:0 }} />}
             <div>
               <div style={{ fontSize:12, color:'var(--color-success-text)', fontWeight:700 }}>✓ Found in library</div>
               <div style={{ fontSize:15, fontWeight:700 }}>{matchedItem.name}</div>
-              {scanResult?.fromBarcode&&scanResult?.packager&&<div style={{ fontSize:11, color:'var(--color-text-tertiary)', marginTop:2 }}>{scanResult.packager}</div>}
-              {scanResult?.expiration&&<div style={{ fontSize:12, color:'var(--color-text-secondary)', marginTop:2 }}>Exp: {scanResult.expiration}</div>}
+              {scanResult?.fromBarcode && scanResult?.packager && <div style={{ fontSize:11, color:'var(--color-text-tertiary)', marginTop:2 }}>{scanResult.packager}</div>}
+              {scanResult?.expiration && <div style={{ fontSize:12, color:'var(--color-text-secondary)', marginTop:2 }}>Exp: {scanResult.expiration}</div>}
             </div>
           </div>
-        ):(
+        ) : (
           <div style={{ background:'var(--color-warning-bg)', border:'1px solid var(--color-warning-border)', borderRadius:'var(--radius-lg)', padding:'12px 14px', marginBottom:16 }}>
-            <div style={{ fontSize:12, color:'var(--color-warning-text)', fontWeight:700, marginBottom:4 }}>{scanResult?.fromBarcode?'📊 Identified — not in library':'⚠ Not in library'}</div>
-            <div style={{ fontSize:15, fontWeight:700 }}>{scanResult?.matchedName||'Unknown'}</div>
-            {scanResult?.fromBarcode&&<div style={{ fontSize:12, color:'var(--color-text-secondary)', marginTop:4 }}>{[scanResult.dosageForm,scanResult.route,scanResult.packager].filter(Boolean).join(' · ')}</div>}
+            <div style={{ fontSize:12, color:'var(--color-warning-text)', fontWeight:700, marginBottom:4 }}>
+              {scanResult?.fromBarcode ? '📊 Identified — not in library' : '⚠ Not in library'}
+            </div>
+            <div style={{ fontSize:15, fontWeight:700 }}>{scanResult?.matchedName || 'Unknown'}</div>
+            {scanResult?.fromBarcode && (
+              <div style={{ fontSize:12, color:'var(--color-text-secondary)', marginTop:4 }}>
+                {[scanResult.dosageForm, scanResult.route, scanResult.packager].filter(Boolean).join(' · ')}
+              </div>
+            )}
           </div>
         )}
-        {!matchedItem?(
+
+        {!matchedItem ? (
           <>
-            <button onClick={()=>navigate('additem',{scanData:{name:scanResult?.matchedName||'',notes:[scanResult?.route,scanResult?.dosageForm].filter(Boolean).join(', '),barcode:scanResult?.barcode||''},capturedPhoto})} style={{ ...btnP, width:'100%', marginBottom:10 }}>Add to library</button>
+            <button onClick={() => navigate('additem', { scanData:{ name:scanResult?.matchedName||'', notes:[scanResult?.route,scanResult?.dosageForm].filter(Boolean).join(', '), barcode:scanResult?.barcode||'' }, capturedPhoto })} style={{ ...btnP, width:'100%', marginBottom:10 }}>Add to library</button>
             <button onClick={reset} style={{ ...btnS, width:'100%' }}>Skip — scan next</button>
           </>
-        ):(
+        ) : (
           <>
             <div style={{ fontSize:13, fontWeight:600, marginBottom:10 }}>Where is this going?</div>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:16, maxHeight:280, overflowY:'auto' }}>
-              {locations.map(loc=><button key={loc.id} onClick={()=>setSelectedLocation(loc.id)} style={{ padding:'10px', borderRadius:'var(--radius-md)', border:selectedLocation===loc.id?'2px solid #1a1a1a':'1px solid var(--color-border)', background:selectedLocation===loc.id?'var(--color-bg-secondary)':'var(--color-bg)', fontWeight:selectedLocation===loc.id?700:400, fontSize:12, cursor:'pointer', fontFamily:'var(--font)', textAlign:'left', display:'flex', alignItems:'center', gap:6 }}><span>{loc.icon}</span><span>{loc.name}</span></button>)}
+              {locations.map(loc => (
+                <button key={loc.id} onClick={() => setSelectedLocation(loc.id)} style={{ padding:'10px', borderRadius:'var(--radius-md)', border:selectedLocation===loc.id?'2px solid #1a1a1a':'1px solid var(--color-border)', background:selectedLocation===loc.id?'var(--color-bg-secondary)':'var(--color-bg)', fontWeight:selectedLocation===loc.id?700:400, fontSize:12, cursor:'pointer', fontFamily:'var(--font)', textAlign:'left', display:'flex', alignItems:'center', gap:6 }}>
+                  <span>{loc.icon}</span><span>{loc.name}</span>
+                </button>
+              ))}
             </div>
-            <button onClick={()=>setPhase('count')} style={{ ...btnG, width:'100%' }}>Next → how many?</button>
+            <button onClick={() => setPhase('count')} style={{ ...btnG, width:'100%' }}>Next → how many?</button>
           </>
         )}
       </div>
     </div>
   );
 
-  if (phase==='count') return (
+  if (phase === 'count') return (
     <div>
-      <TopBar title={matchedItem?.name} onBack={()=>setPhase('location')} />
+      <TopBar title={matchedItem?.name} onBack={() => setPhase('location')} />
       <div style={{ padding:'0 20px' }}>
-        <div style={{ background:'var(--color-bg-secondary)', borderRadius:'var(--radius-md)', padding:'10px 14px', marginBottom:16, fontSize:13, color:'var(--color-text-secondary)', textAlign:'center' }}>→ {locations.find(l=>l.id===selectedLocation)?.name}<br/>How many units?</div>
+        <div style={{ background:'var(--color-bg-secondary)', borderRadius:'var(--radius-md)', padding:'10px 14px', marginBottom:16, fontSize:13, color:'var(--color-text-secondary)', textAlign:'center' }}>
+          → {locations.find(l => l.id === selectedLocation)?.name}<br/>How many units?
+        </div>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:12 }}>
-          {quick.map(n=><button key={n} onClick={()=>setCount(String(n))} style={{ padding:'14px', borderRadius:'var(--radius-md)', border:count===String(n)?'none':'1px solid var(--color-border)', background:count===String(n)?'#1a1a1a':'var(--color-bg-secondary)', color:count===String(n)?'#fff':'var(--color-text)', fontWeight:700, fontSize:18, cursor:'pointer', fontFamily:'var(--font)' }}>{n}</button>)}
-        </div>
-        <input value={count} onChange={e=>setCount(e.target.value)} type="number" min="1" placeholder="Other amount" style={{ textAlign:'center', fontWeight:600, fontSize:16, marginBottom:16 }} />
-        <button onClick={handleCountNext} disabled={!parseInt(count)||parseInt(count)<1} style={{ ...btnG, width:'100%', opacity:parseInt(count)>0?1:0.45 }}>Next → expiration dates</button>
-      </div>
-    </div>
-  );
-
-  if (phase==='expirations') return (
-    <div>
-      <TopBar title={matchedItem?.name} onBack={()=>setPhase('count')} />
-      <div style={{ padding:'0 20px' }}>
-        <div style={{ background:'var(--color-bg-secondary)', borderRadius:'var(--radius-md)', padding:'10px 14px', marginBottom:16, fontSize:13, color:'var(--color-text-secondary)', textAlign:'center' }}>{expirations.length} unit{expirations.length!==1?'s':''} → {locations.find(l=>l.id===selectedLocation)?.name}<br/>Confirm expiration — tap N/A if none</div>
-        {expirations.map((exp,i)=>(
-          <div key={i} style={{ marginBottom:16 }}>
-            <ExpirationInput label={`Unit ${i+1} of ${expirations.length}`} value={exp} onChange={v=>{const next=[...expirations];next[i]=v;setExpirations(next);}} />
-          </div>
-        ))}
-        <button onClick={handleSave} style={{ ...btnG, width:'100%', marginTop:8 }}>✓ Confirm — save {expirations.length} unit{expirations.length!==1?'s':''}</button>
-      </div>
-    </div>
-  );
-  return null;
-}
-
-function OrderReportView({ library, stock, categories, navigate }) {
-  const report   = generateOrderReport(library, stock, categories);
-  const date     = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
-  const allItems = report.flatMap(s=>s.items);
-  const toOrder  = allItems.filter(i=>i.needed>0);
-  const belowPar = allItems.filter(i=>i.usable<i.par);
-
-  function exportCSV() {
-    const rows=[['Category','Item','Station Par','Total Stock','Expired','Expiring This Month','Usable Stock','Order Qty','Status']];
-    report.forEach(({category,items})=>{items.forEach(({item,total,expired,expiringSoon,usable,par,needed})=>{rows.push([category.name,item.name,par,total,expired,expiringSoon,usable,needed,needed>0?'ORDER':'OK']);});});
-    const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
-    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-    a.download=`ems-order-report-${new Date().toISOString().slice(0,10)}.csv`;a.click();
-  }
-
-  return (
-    <div style={{ paddingBottom:40 }}>
-      <TopBar title="Order Report" subtitle={date} onBack={()=>navigate(-1)} right={<button onClick={exportCSV} style={{ ...btnS, padding:'7px 14px', fontSize:12 }}>Export CSV</button>} />
-      <div style={{ padding:'0 20px' }}>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:20 }}>
-          {[{label:'Items to order',value:toOrder.length,type:'expired'},{label:'Below par',value:belowPar.length,type:'soon'},{label:'Total items',value:allItems.length,type:'none'}].map(({label,value,type})=>{
-            const s=SS[type];const hasAny=value>0&&type!=='none';
-            return <div key={label} style={{ background:hasAny?s.bg:'var(--color-bg-secondary)', border:hasAny?`1px solid ${s.border}`:'1px solid var(--color-border)', borderRadius:'var(--radius-md)', padding:'12px 8px', textAlign:'center' }}>
-              <div style={{ fontSize:24, fontWeight:700, color:hasAny?s.text:'var(--color-text)', marginBottom:2 }}>{value}</div>
-              <div style={{ fontSize:11, color:hasAny?s.text:'var(--color-text-tertiary)' }}>{label}</div>
-            </div>;
-          })}
-        </div>
-        {report.map(({category,items})=>(
-          <div key={category.id} style={{ marginBottom:24 }}>
-            <SectionHeader title={`${category.icon} ${category.name}`} />
-            {items.map(({item,total,expired,expiringSoon,usable,par,needed})=>{
-              const isUrgent=needed>0&&expired>0; const isNeeded=needed>0;
-              return <div key={item.id} style={{ padding:'13px 14px', background:isUrgent?'var(--color-danger-bg)':isNeeded?'var(--color-warning-bg)':'var(--color-bg)', border:`1px solid ${isUrgent?'var(--color-danger-border)':isNeeded?'var(--color-warning-border)':'var(--color-border)'}`, borderRadius:'var(--radius-lg)', marginBottom:8 }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-                  <div style={{ fontWeight:700, fontSize:14 }}>{item.name}</div>
-                  {isNeeded?<span style={{ background:isUrgent?'var(--color-danger-text)':'var(--color-warning-text)', color:'#fff', fontSize:12, fontWeight:700, padding:'3px 10px', borderRadius:20 }}>ORDER {needed}{isUrgent?' ⚠':''}</span>:<span style={{ fontSize:12, fontWeight:700, color:'var(--color-success-text)' }}>✓ OK</span>}
-                </div>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:4 }}>
-                  {[['Station par',par],['Total stock',total],['Expired',expired,expired>0?'var(--color-danger-text)':null],['Expiring this month',expiringSoon,expiringSoon>0?'var(--color-warning-text)':null],['Usable stock',usable,usable<par?'var(--color-danger-text)':null],['Need to order',needed,needed>0?'var(--color-warning-text)':null]].map(([label,value,color])=>(
-                    <div key={label} style={{ fontSize:12 }}><span style={{ color:'var(--color-text-secondary)' }}>{label}: </span><span style={{ fontWeight:600, color:color||'var(--color-text)' }}>{value}</span></div>
-                  ))}
-                </div>
-              </div>;
-            })}
-          </div>
-        ))}
-        {allItems.length===0&&<EmptyState icon="📋" title="No items with par set" subtitle="Set station par on library items to generate order reports" action={<button onClick={()=>navigate('library')} style={{ ...btnP, padding:'10px 20px' }}>Go to Library</button>} />}
-      </div>
-    </div>
-  );
-}
-
-function SettingsView({ library, stock, locations, categories, templates, navigate, onSaveLocations, onSaveCategories, onSaveTemplates, onSaveStock }) {
-  const [tab, setTab] = useState('locations');
-  return (
-    <div style={{ paddingBottom:40 }}>
-      <TopBar title="Settings" onBack={()=>navigate(-1)} />
-      <div style={{ padding:'0 20px' }}>
-        <div style={{ display:'flex', gap:0, marginBottom:16, borderBottom:'1px solid var(--color-border)' }}>
-          {[['locations','Locations'],['categories','Categories'],['templates','Templates']].map(([id,label])=>(
-            <button key={id} onClick={()=>setTab(id)} style={{ flex:1, padding:'10px', border:'none', borderBottom:tab===id?'2px solid var(--color-text)':'2px solid transparent', background:'transparent', color:tab===id?'var(--color-text)':'var(--color-text-secondary)', fontWeight:tab===id?600:400, fontSize:13, cursor:'pointer', fontFamily:'var(--font)', marginBottom:-1 }}>{label}</button>
+          {quick.map(n => (
+            <button key={n} onClick={() => setCount(String(n))} style={{ padding:'14px', borderRadius:'var(--radius-md)', border:count===String(n)?'none':'1px solid var(--color-border)', background:count===String(n)?'#1a1a1a':'var(--color-bg-secondary)', color:count===String(n)?'#fff':'var(--color-text)', fontWeight:700, fontSize:18, cursor:'pointer', fontFamily:'var(--font)' }}>{n}</button>
           ))}
         </div>
-        {tab==='locations'&&(
-          <>
-            {locations.map(loc=>(
-              <div key={loc.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'11px 14px', background:'var(--color-bg)', border:'1px solid var(--color-border)', borderRadius:'var(--radius-lg)', marginBottom:8 }}>
-                <span style={{ fontSize:20 }}>{loc.icon}</span>
-                <span style={{ flex:1, fontWeight:500, fontSize:14 }}>{loc.name}</span>
-                <button onClick={()=>{const name=prompt('Rename:',loc.name);if(name)onSaveLocations(locations.map(l=>l.id===loc.id?{...l,name}:l));}} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--color-text-tertiary)', fontSize:13, fontFamily:'var(--font)' }}>Rename</button>
-                <button onClick={()=>{ if(!window.confirm(`Delete ${loc.name}? Stock moves to Supply Room.`))return; onSaveLocations(locations.filter(l=>l.id!==loc.id)); onSaveStock(stock.map(s=>s.locationId===loc.id?{...s,locationId:'supply-room'}:s)); }} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--color-danger-text)', fontSize:13, fontFamily:'var(--font)' }}>Delete</button>
-              </div>
-            ))}
-            <button onClick={()=>{const name=prompt('Location name:');if(!name)return;const icon=prompt('Icon (emoji):')||'📦';onSaveLocations([...locations,{id:uid(),name,icon,type:'bag',templateId:null}]);}} style={{ ...btnS, width:'100%', marginTop:8 }}>+ Add location</button>
-          </>
-        )}
-        {tab==='categories'&&(
-          <>
-            {categories.map(cat=>(
-              <div key={cat.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'11px 14px', background:'var(--color-bg)', border:'1px solid var(--color-border)', borderRadius:'var(--radius-lg)', marginBottom:8 }}>
-                <span style={{ fontSize:20 }}>{cat.icon}</span>
-                <span style={{ flex:1, fontWeight:500, fontSize:14 }}>{cat.name}</span>
-                <button onClick={()=>{const name=prompt('Rename:',cat.name);if(name)onSaveCategories(categories.map(c=>c.id===cat.id?{...c,name}:c));}} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--color-text-tertiary)', fontSize:13, fontFamily:'var(--font)' }}>Rename</button>
-              </div>
-            ))}
-            <button onClick={()=>{const name=prompt('Category name:');if(!name)return;const icon=prompt('Emoji icon:')||'📦';onSaveCategories([...categories,{id:uid(),name,icon}]);}} style={{ ...btnS, width:'100%', marginTop:8 }}>+ Add category</button>
-          </>
-        )}
-        {tab==='templates'&&(
-          <>
-            {templates.length===0&&<EmptyState icon="📋" title="No templates yet" subtitle="Create a template to quickly populate new bags" />}
-            {templates.map(tmpl=>(
-              <div key={tmpl.id} onClick={()=>navigate('edittemplate',{templateId:tmpl.id})} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 14px', background:'var(--color-bg)', border:'1px solid var(--color-border)', borderRadius:'var(--radius-lg)', marginBottom:8, cursor:'pointer' }}>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontWeight:600, fontSize:14 }}>{tmpl.name}</div>
-                  <div style={{ fontSize:12, color:'var(--color-text-secondary)', marginTop:2 }}>{tmpl.items?.length||0} items</div>
-                </div>
-                <span style={{ color:'var(--color-text-tertiary)', fontSize:18 }}>›</span>
-              </div>
-            ))}
-            <button onClick={()=>{const name=prompt('Template name:');if(!name)return;onSaveTemplates([...templates,{id:uid(),name,items:[]}]);}} style={{ ...btnS, width:'100%', marginTop:8 }}>+ Add template</button>
-          </>
-        )}
+        <input value={count} onChange={e => setCount(e.target.value)} type="number" min="1" placeholder="Other amount" style={{ textAlign:'center', fontWeight:600, fontSize:16, marginBottom:16 }} />
+        <button onClick={handleCountNext} disabled={!parseInt(count) || parseInt(count) < 1} style={{ ...btnG, width:'100%', opacity:parseInt(count)>0?1:0.45 }}>Next → expiration dates</button>
       </div>
     </div>
   );
-}
 
-function TemplateEditorView({ templateId, templates, library, categories, navigate, onSaveTemplates }) {
-  const tmpl = templates.find(t => t.id === templateId);
-  const [items, setItems] = useState(tmpl?.items||[]);
-  const [search, setSearch] = useState('');
-  if (!tmpl) return null;
-  const q = search.trim().toLowerCase();
-  function save() { onSaveTemplates(templates.map(t=>t.id===templateId?{...t,items}:t)); navigate('settings'); }
-  return (
-    <div style={{ paddingBottom:40 }}>
-      <TopBar title={tmpl.name} onBack={()=>navigate('settings')} right={<button onClick={save} style={{ ...btnG, padding:'7px 14px', fontSize:13 }}>Save</button>} />
+  if (phase === 'expirations') return (
+    <div>
+      <TopBar title={matchedItem?.name} onBack={() => setPhase('count')} />
       <div style={{ padding:'0 20px' }}>
-        <SectionHeader title={`Items in template (${items.length})`} />
-        {items.length===0&&<div style={{ fontSize:13, color:'var(--color-text-tertiary)', textAlign:'center', padding:'1rem' }}>No items yet</div>}
-        {items.map(({libraryId,bagPar})=>{
-          const item=library.find(d=>d.id===libraryId); if(!item) return null;
-          const cat=categories.find(c=>c.id===item.category);
-          return <div key={libraryId} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 12px', background:'var(--color-bg)', border:'1px solid var(--color-border)', borderRadius:'var(--radius-md)', marginBottom:6 }}>
-            <span style={{ fontSize:16 }}>{cat?.icon||'📦'}</span>
-            <span style={{ flex:1, fontSize:13, fontWeight:500 }}>{item.name}</span>
-            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-              <span style={{ fontSize:11, color:'var(--color-text-tertiary)' }}>par:</span>
-              <input value={bagPar} onChange={e=>setItems(prev=>prev.map(i=>i.libraryId===libraryId?{...i,bagPar:parseInt(e.target.value)||1}:i))} type="number" min="1" style={{ width:48, textAlign:'center', padding:'4px', fontSize:13 }} />
-            </div>
-            <button onClick={()=>setItems(prev=>prev.filter(i=>i.libraryId!==libraryId))} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--color-danger-text)', fontSize:18, lineHeight:1 }}>×</button>
-          </div>;
-        })}
-        <div style={{ marginTop:16 }}>
-          <SectionHeader title="Add from library" />
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search library..." style={{ marginBottom:10 }} />
-          {library.filter(i=>i.status!=='inactive').filter(i=>!q||i.name.toLowerCase().includes(q)).filter(i=>!items.find(t=>t.libraryId===i.id)).map(item=>{
-            const cat=categories.find(c=>c.id===item.category);
-            return <div key={item.id} onClick={()=>setItems(prev=>[...prev,{libraryId:item.id,bagPar:1}])} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 12px', background:'var(--color-bg-secondary)', border:'1px solid var(--color-border)', borderRadius:'var(--radius-md)', marginBottom:6, cursor:'pointer' }}>
-              <span style={{ fontSize:16 }}>{cat?.icon||'📦'}</span>
-              <span style={{ flex:1, fontSize:13 }}>{item.name}</span>
-              <span style={{ fontSize:18, color:'var(--color-text-tertiary)' }}>+</span>
-            </div>;
-          })}
+        <div style={{ background:'var(--color-bg-secondary)', borderRadius:'var(--radius-md)', padding:'10px 14px', marginBottom:16, fontSize:13, color:'var(--color-text-secondary)', textAlign:'center' }}>
+          {expirations.length} unit{expirations.length !== 1 ? 's' : ''} → {locations.find(l => l.id === selectedLocation)?.name}<br/>Confirm expiration — tap N/A if none
         </div>
+        {expirations.map((exp, i) => (
+          <div key={i} style={{ marginBottom:16 }}>
+            <ExpirationInput
+              label={`Unit ${i+1} of ${expirations.length}`}
+              value={exp}
+              onChange={v => { const next = [...expirations]; next[i] = v; setExpirations(next); }}
+            />
+          </div>
+        ))}
+        <button onClick={handleSave} style={{ ...btnG, width:'100%', marginTop:8 }}>
+          ✓ Confirm — save {expirations.length} unit{expirations.length !== 1 ? 's' : ''}
+        </button>
       </div>
     </div>
   );
-}
 
-function BottomNav({ view, navigate, isDesktop }) {
-  const tabs = [
-    { id:'home',      icon:'🏠', label:'Home' },
-    { id: isDesktop ? 'map' : 'locations', icon:'📍', label:'Locations' },
-    { id:'inventory', icon:'📋', label:'Inventory' },
-    { id:'library',   icon:'📦', label:'Library' },
-  ];
-  return (
-    <div style={{ position:'fixed', bottom:0, left:'50%', transform:'translateX(-50%)', width:'100%', maxWidth:680, background:'var(--color-bg)', borderTop:'1px solid var(--color-border)', display:'flex', zIndex:50 }}>
-      {tabs.map(tab=>(
-        <button key={tab.id} onClick={()=>navigate(tab.id)} style={{ flex:1, padding:'10px 8px 14px', background:'none', border:'none', cursor:'pointer', fontFamily:'var(--font)', color:view===tab.id?'var(--color-text)':'var(--color-text-tertiary)', fontWeight:view===tab.id?700:400, fontSize:10, display:'flex', flexDirection:'column', alignItems:'center', gap:2 }}>
-          <span style={{ fontSize:20 }}>{tab.icon}</span>{tab.label}
-        </button>
-      ))}
-      <button onClick={()=>navigate('quickreceive')} style={{ flex:1.5, padding:'8px 8px 12px', background:'none', border:'none', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:2 }}>
-        <div style={{ background:'#1d6b3a', borderRadius:10, padding:'5px 10px', color:'#fff', fontWeight:700, fontSize:11 }}>Quick<br/>Receive</div>
-      </button>
-    </div>
-  );
+  return null;
 }
 
 export default function App() {
