@@ -34,54 +34,22 @@ function extractCandidates(barcode) {
 
 async function searchFDA(query) {
   const clean = query.replace(/-/g, '');
-  const urls = [
-    `https://api.fda.gov/drug/ndc.json?search=product_ndc:"${query}"&limit=1`,
-    `https://api.fda.gov/drug/ndc.json?search=package_ndc:"${query}"&limit=1`,
-    `https://api.fda.gov/drug/ndc.json?search=product_ndc:"${clean}"&limit=1`,
-    `https://api.fda.gov/drug/ndc.json?search=package_ndc:"${clean}"&limit=1`,
+  const searches = [
+    `package_ndc:"${query}"`,
+    `product_ndc:"${query}"`,
+    `package_ndc:"${clean}"`,
+    `product_ndc:"${clean}"`,
+    // Also try without quotes for partial match
+    `package_ndc:${query}`,
+    `product_ndc:${query}`,
   ];
-  for (const url of urls) {
+  for (const search of searches) {
     try {
+      const url = `https://api.fda.gov/drug/ndc.json?search=${encodeURIComponent(search)}&limit=1`;
       const r = await fetch(url);
       if (!r.ok) continue;
       const d = await r.json();
       if (d.results?.[0]) return d.results[0];
-    } catch { }
-  }
-  return null;
-}
-
-// Wildcard search using first 4-5 digits of NDC + generic name hint
-async function searchFDAWildcard(candidates) {
-  // Extract likely labeler codes (first 4-5 digits)
-  const labelerCodes = new Set();
-  candidates.forEach(c => {
-    const digits = c.replace(/-/g, '');
-    if (digits.length >= 9) {
-      labelerCodes.add(digits.slice(0, 4));
-      labelerCodes.add(digits.slice(0, 5));
-    }
-  });
-
-  for (const code of labelerCodes) {
-    try {
-      const r = await fetch(`https://api.fda.gov/drug/ndc.json?search=product_ndc:${code}*&limit=5`);
-      if (!r.ok) continue;
-      const d = await r.json();
-      if (d.results?.length > 0) {
-        // Find best match by checking if full NDC digits appear in any result
-        for (const result of d.results) {
-          const resultNDC = (result.product_ndc || '').replace(/-/g, '');
-          for (const candidate of candidates) {
-            const candidateClean = candidate.replace(/-/g, '');
-            if (resultNDC === candidateClean || candidateClean.includes(resultNDC) || resultNDC.includes(candidateClean.slice(0, 8))) {
-              return result;
-            }
-          }
-        }
-        // Return first result if labeler matches
-        return d.results[0];
-      }
     } catch { }
   }
   return null;
@@ -96,7 +64,7 @@ async function searchByName(name) {
   ];
   for (const search of searches) {
     try {
-      const r = await fetch(`https://api.fda.gov/drug/ndc.json?search=${encodeURIComponent(search)}&limit=1`);
+      const url = `https://api.fda.gov/drug/ndc.json?search=${encodeURIComponent(search)}&limit=1`;
       if (r.ok) { const d = await r.json(); if (d.results?.[0]) return d.results[0]; }
     } catch { }
   }
