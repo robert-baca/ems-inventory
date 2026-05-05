@@ -1388,12 +1388,13 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
   const [count,setCount]=useState('');
   const [expirations,setExpirations]=useState([]);
   const [sessionCount,setSessionCount]=useState(0);
+  const [vendor,setVendor]=useState('');
   const quick=[1,2,3,4,5,6];
 
-  function handleScanConfirm(result, photo){setCapturedPhoto(photo);setScanResult(result);setMatchedItem(result.matchedId?library.find(d=>d.id===result.matchedId)||null:null);setPhase('location');}
+  function handleScanConfirm(result, photo){const matched=result.matchedId?library.find(d=>d.id===result.matchedId)||null:null;setCapturedPhoto(photo);setScanResult(result);setMatchedItem(matched);setVendor(matched?.vendor||'');setPhase('location');}
   function handleCountNext(){const n=parseInt(count);if(!n||n<1)return;setExpirations(Array(n).fill(scanResult?.expiration||''));setPhase('expirations');}
-  async function handleSave(){const newEntries=expirations.map(exp=>({id:uid(),libraryId:matchedItem.id,locationId:selectedLocation,expiration:exp||'NA',status:'active',addedAt:new Date().toISOString(),lot:scanResult?.lot||'',barcode:scanResult?.barcode||''}));if(onAppendStock){await onAppendStock(newEntries);}else{onSaveStock([...stock,...newEntries]);}setSessionCount(c=>c+parseInt(count));setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);}
-  function reset(){setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);}
+  async function handleSave(){const newEntries=expirations.map(exp=>({id:uid(),libraryId:matchedItem.id,locationId:selectedLocation,expiration:exp||'NA',status:'active',addedAt:new Date().toISOString(),lot:scanResult?.lot||'',barcode:scanResult?.barcode||''}));if(matchedItem&&vendor!==(matchedItem.vendor||'')){await onSaveLibrary(library.map(d=>d.id===matchedItem.id?{...d,vendor}:d));}if(onAppendStock){await onAppendStock(newEntries);}else{onSaveStock([...stock,...newEntries]);}setSessionCount(c=>c+parseInt(count));setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);setVendor('');}
+  function reset(){setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);setVendor('');}
 
   if(phase==='camera')return(
     <div>
@@ -1423,6 +1424,18 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
             <div style={{fontSize:15,fontWeight:700}}>{scanResult?.matchedName||'Unknown'}</div>
           </div>
         )}
+        {matchedItem&&(
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:12,fontWeight:600,color:'var(--color-text-secondary)',marginBottom:8}}>Vendor / supplier</div>
+            <div style={{display:'flex',gap:8}}>
+              {['mckesson','boundtree'].map(v=>(
+                <button key={v} onClick={()=>setVendor(vendor===v?'':v)} style={{flex:1,padding:'9px',borderRadius:'var(--radius-md)',border:vendor===v?'none':'1px solid var(--color-border)',background:vendor===v?'#1a1a1a':'var(--color-bg-secondary)',color:vendor===v?'#fff':'var(--color-text-secondary)',fontSize:13,fontWeight:vendor===v?600:400,cursor:'pointer',fontFamily:'var(--font)'}}>
+                  {v==='mckesson'?'McKesson':'Bound Tree'}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {!matchedItem?(
           <><button onClick={()=>navigate('additem',{scanData:{name:scanResult?.matchedName||'',notes:[scanResult?.route,scanResult?.dosageForm].filter(Boolean).join(', '),barcode:scanResult?.barcode||''},capturedPhoto})} style={{...btnP,width:'100%',marginBottom:10}}>Add to library</button><button onClick={reset} style={{...btnS,width:'100%'}}>Skip — scan next</button></>
         ):(
@@ -1444,26 +1457,93 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
 }
 
 function OrderReportView({ library, stock, categories, navigate }) {
+  const [vendorFilter,setVendorFilter]=useState('all');
   const report=generateOrderReport(library,stock,categories);
   const date=new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+  const active=stock.filter(s=>s.status==='active');
+
+  const vendorItems=vendorFilter==='all'?null:library
+    .filter(d=>d.status!=='inactive'&&d.vendor===vendorFilter)
+    .map(item=>{
+      const entries=active.filter(s=>s.libraryId===item.id);
+      const expired=entries.filter(s=>getStatus(s.expiration).type==='expired').length;
+      const expiringSoon=entries.filter(s=>getStatus(s.expiration).type==='soon').length;
+      const usable=entries.filter(s=>getStatus(s.expiration).type!=='expired').length;
+      const par=item.stationPar||0;
+      const needed=Math.max(0,par-usable);
+      return{item,total:entries.length,expired,expiringSoon,usable,par,needed};
+    })
+    .filter(({expired,expiringSoon,needed,total})=>expired>0||expiringSoon>0||needed>0||total>0)
+    .sort((a,b)=>{
+      const scoreA=(a.needed>0?3:0)+(a.expired>0?2:0)+(a.expiringSoon>0?1:0);
+      const scoreB=(b.needed>0?3:0)+(b.expired>0?2:0)+(b.expiringSoon>0?1:0);
+      return scoreB-scoreA;
+    });
+
   const allItems=report.flatMap(s=>s.items);
   const toOrder=allItems.filter(i=>i.needed>0);
   const belowPar=allItems.filter(i=>i.usable<i.par);
   function exportCSV(){const rows=[['Category','Item','Station Par','Total Stock','Expired','Expiring This Month','Usable Stock','Order Qty','Status']];report.forEach(({category,items})=>{items.forEach(({item,total,expired,expiringSoon,usable,par,needed})=>{rows.push([category.name,item.name,par,total,expired,expiringSoon,usable,needed,needed>0?'ORDER':'OK']);});});const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`ems-order-report-${new Date().toISOString().slice(0,10)}.csv`;a.click();}
+  const vendorLabel=vendorFilter==='mckesson'?'McKesson':vendorFilter==='boundtree'?'Bound Tree':'All';
   return(
     <div style={{paddingBottom:40}}>
-      <TopBar title="Order Report" subtitle={date} onBack={()=>navigate(-1)} right={<button onClick={exportCSV} style={{...btnS,padding:'7px 14px',fontSize:12}}>Export CSV</button>}/>
+      <TopBar title="Order Report" subtitle={date} onBack={()=>navigate(-1)} right={vendorFilter==='all'?<button onClick={exportCSV} style={{...btnS,padding:'7px 14px',fontSize:12}}>Export CSV</button>:null}/>
       <div style={{padding:'0 20px'}}>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:20}}>
-          {[{label:'Items to order',value:toOrder.length,type:'expired'},{label:'Below par',value:belowPar.length,type:'soon'},{label:'Total items',value:allItems.length,type:'none'}].map(({label,value,type})=>{const s=SS[type];const hasAny=value>0&&type!=='none';return<div key={label} style={{background:hasAny?s.bg:'var(--color-bg-secondary)',border:hasAny?`1px solid ${s.border}`:'1px solid var(--color-border)',borderRadius:'var(--radius-md)',padding:'12px 8px',textAlign:'center'}}><div style={{fontSize:24,fontWeight:700,color:hasAny?s.text:'var(--color-text)',marginBottom:2}}>{value}</div><div style={{fontSize:11,color:hasAny?s.text:'var(--color-text-tertiary)'}}>{label}</div></div>;})}
+        <div style={{display:'flex',gap:0,marginBottom:16,borderBottom:'1px solid var(--color-border)'}}>
+          {[['all','All'],['mckesson','McKesson'],['boundtree','Bound Tree']].map(([id,label])=>(
+            <button key={id} onClick={()=>setVendorFilter(id)} style={{flex:1,padding:'10px',border:'none',borderBottom:vendorFilter===id?'2px solid var(--color-text)':'2px solid transparent',background:'transparent',color:vendorFilter===id?'var(--color-text)':'var(--color-text-secondary)',fontWeight:vendorFilter===id?600:400,fontSize:13,cursor:'pointer',fontFamily:'var(--font)',marginBottom:-1}}>{label}</button>
+          ))}
         </div>
-        {report.map(({category,items})=>(
-          <div key={category.id} style={{marginBottom:24}}>
-            <SectionHeader title={`${category.icon} ${category.name}`}/>
-            {items.map(({item,total,expired,expiringSoon,usable,par,needed})=>{const isUrgent=needed>0&&expired>0;const isNeeded=needed>0;return<div key={item.id} style={{padding:'13px 14px',background:isUrgent?'var(--color-danger-bg)':isNeeded?'var(--color-warning-bg)':'var(--color-bg)',border:`1px solid ${isUrgent?'var(--color-danger-border)':isNeeded?'var(--color-warning-border)':'var(--color-border)'}`,borderRadius:'var(--radius-lg)',marginBottom:8}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><div style={{fontWeight:700,fontSize:14}}>{item.name}</div>{isNeeded?<span style={{background:isUrgent?'var(--color-danger-text)':'var(--color-warning-text)',color:'#fff',fontSize:12,fontWeight:700,padding:'3px 10px',borderRadius:20}}>ORDER {needed}{isUrgent?' ⚠':''}</span>:<span style={{fontSize:12,fontWeight:700,color:'var(--color-success-text)'}}>✓ OK</span>}</div><div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:4}}>{[['Station par',par],['Total stock',total],['Expired',expired,expired>0?'var(--color-danger-text)':null],['Expiring this month',expiringSoon,expiringSoon>0?'var(--color-warning-text)':null],['Usable stock',usable,usable<par?'var(--color-danger-text)':null],['Need to order',needed,needed>0?'var(--color-warning-text)':null]].map(([label,value,color])=><div key={label} style={{fontSize:12}}><span style={{color:'var(--color-text-secondary)'}}>{label}: </span><span style={{fontWeight:600,color:color||'var(--color-text)'}}>{value}</span></div>)}</div></div>;})}
-          </div>
-        ))}
-        {allItems.length===0&&<EmptyState icon="📋" title="No items with par set" subtitle="Set station par on library items to generate order reports" action={<button onClick={()=>navigate('library')} style={{...btnP,padding:'10px 20px'}}>Go to Library</button>}/>}
+
+        {vendorFilter==='all'?(
+          <>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:20}}>
+              {[{label:'Items to order',value:toOrder.length,type:'expired'},{label:'Below par',value:belowPar.length,type:'soon'},{label:'Total items',value:allItems.length,type:'none'}].map(({label,value,type})=>{const s=SS[type];const hasAny=value>0&&type!=='none';return<div key={label} style={{background:hasAny?s.bg:'var(--color-bg-secondary)',border:hasAny?`1px solid ${s.border}`:'1px solid var(--color-border)',borderRadius:'var(--radius-md)',padding:'12px 8px',textAlign:'center'}}><div style={{fontSize:24,fontWeight:700,color:hasAny?s.text:'var(--color-text)',marginBottom:2}}>{value}</div><div style={{fontSize:11,color:hasAny?s.text:'var(--color-text-tertiary)'}}>{label}</div></div>;})}
+            </div>
+            {report.map(({category,items})=>(
+              <div key={category.id} style={{marginBottom:24}}>
+                <SectionHeader title={`${category.icon} ${category.name}`}/>
+                {items.map(({item,total,expired,expiringSoon,usable,par,needed})=>{const isUrgent=needed>0&&expired>0;const isNeeded=needed>0;return<div key={item.id} style={{padding:'13px 14px',background:isUrgent?'var(--color-danger-bg)':isNeeded?'var(--color-warning-bg)':'var(--color-bg)',border:`1px solid ${isUrgent?'var(--color-danger-border)':isNeeded?'var(--color-warning-border)':'var(--color-border)'}`,borderRadius:'var(--radius-lg)',marginBottom:8}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><div style={{fontWeight:700,fontSize:14}}>{item.name}</div>{isNeeded?<span style={{background:isUrgent?'var(--color-danger-text)':'var(--color-warning-text)',color:'#fff',fontSize:12,fontWeight:700,padding:'3px 10px',borderRadius:20}}>ORDER {needed}{isUrgent?' ⚠':''}</span>:<span style={{fontSize:12,fontWeight:700,color:'var(--color-success-text)'}}>✓ OK</span>}</div><div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:4}}>{[['Station par',par],['Total stock',total],['Expired',expired,expired>0?'var(--color-danger-text)':null],['Expiring this month',expiringSoon,expiringSoon>0?'var(--color-warning-text)':null],['Usable stock',usable,usable<par?'var(--color-danger-text)':null],['Need to order',needed,needed>0?'var(--color-warning-text)':null]].map(([label,value,color])=><div key={label} style={{fontSize:12}}><span style={{color:'var(--color-text-secondary)'}}>{label}: </span><span style={{fontWeight:600,color:color||'var(--color-text)'}}>{value}</span></div>)}</div></div>;})}
+              </div>
+            ))}
+            {allItems.length===0&&<EmptyState icon="📋" title="No items with par set" subtitle="Set station par on library items to generate order reports" action={<button onClick={()=>navigate('library')} style={{...btnP,padding:'10px 20px'}}>Go to Library</button>}/>}
+          </>
+        ):(
+          <>
+            <div style={{fontSize:13,color:'var(--color-text-secondary)',marginBottom:16}}>
+              Items from <strong>{vendorLabel}</strong> that are low, expired, or expiring soon
+            </div>
+            {!vendorItems||vendorItems.length===0?(
+              <EmptyState icon="✅" title={`No issues for ${vendorLabel}`} subtitle="All items from this vendor are stocked and current"/>
+            ):(
+              vendorItems.map(({item,total,expired,expiringSoon,usable,par,needed})=>{
+                const isUrgent=needed>0&&expired>0;const isNeeded=needed>0;const hasExpiry=expired>0||expiringSoon>0;
+                const cat=categories.find(c=>c.id===item.category);
+                return(
+                  <div key={item.id} onClick={()=>navigate('drugdetail',{libraryId:item.id})} style={{padding:'13px 14px',background:isUrgent?'var(--color-danger-bg)':isNeeded?'var(--color-warning-bg)':hasExpiry?'var(--color-warning-bg)':'var(--color-bg)',border:`1px solid ${isUrgent?'var(--color-danger-border)':hasExpiry?'var(--color-warning-border)':'var(--color-border)'}`,borderRadius:'var(--radius-lg)',marginBottom:8,cursor:'pointer'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                      <div style={{display:'flex',alignItems:'center',gap:8}}>
+                        <span style={{fontSize:16}}>{cat?.icon||'📦'}</span>
+                        <span style={{fontWeight:700,fontSize:14}}>{item.name}</span>
+                      </div>
+                      <div style={{display:'flex',gap:6,flexShrink:0}}>
+                        {isNeeded&&<span style={{background:isUrgent?'var(--color-danger-text)':'var(--color-warning-text)',color:'#fff',fontSize:11,fontWeight:700,padding:'2px 8px',borderRadius:20}}>ORDER {needed}</span>}
+                        {expired>0&&<span style={{background:'var(--color-danger-text)',color:'#fff',fontSize:11,fontWeight:700,padding:'2px 8px',borderRadius:20}}>{expired} EXPIRED</span>}
+                        {expiringSoon>0&&!isNeeded&&<span style={{background:'var(--color-warning-text)',color:'#fff',fontSize:11,fontWeight:700,padding:'2px 8px',borderRadius:20}}>{expiringSoon} EXP SOON</span>}
+                      </div>
+                    </div>
+                    <div style={{display:'flex',gap:12,fontSize:12,color:'var(--color-text-secondary)'}}>
+                      <span>Stock: <strong style={{color:'var(--color-text)'}}>{total}</strong></span>
+                      {par>0&&<span>Par: <strong style={{color:'var(--color-text)'}}>{par}</strong></span>}
+                      {expired>0&&<span style={{color:'var(--color-danger-text)',fontWeight:600}}>{expired} expired</span>}
+                      {expiringSoon>0&&<span style={{color:'var(--color-warning-text)',fontWeight:600}}>{expiringSoon} exp soon</span>}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </>
+        )}
       </div>
     </div>
   );
