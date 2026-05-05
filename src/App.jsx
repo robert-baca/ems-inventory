@@ -1280,12 +1280,28 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
                   catch{setScanError('Lookup failed');}
                   setScanning(false);
                 }}
-                onPhotosCapture={async photos=>{
-                  setScanning(true);setScanError(null);
-                  try{const result=await api.scan(photos);setForm(f=>({...f,name:result.name||f.name,category:categories.find(c=>c.id===result.category)?.id||result.category||f.category,packagingType:result.packagingType||f.packagingType,unit:result.unit||f.unit,size:result.size||f.size,notes:result.notes||f.notes}));if(!photo&&photos[0])setPhoto(await resizeImage(photos[0],400));setScanned(true);}
-                  catch{setScanError('Could not read label — fill in manually');}
-                  setScanning(false);
-                }}
+               onPhotosCapture={async photos => {
+  setScanning(true); setScanError(null);
+  try {
+    const result = await api.scan(photos);
+    setForm(f => ({
+      ...f,
+      name:          result.name          || f.name,
+      category:      categories.find(c => c.id === result.category)?.id || result.category || f.category,
+      packagingType: result.packagingType || f.packagingType,
+      unit:          result.unit          || f.unit,
+      size:          result.size          || f.size,
+      notes:         result.notes         || f.notes,
+    }));
+    if (!photo && photos[0]) setPhoto(await resizeImage(photos[0], 400));
+    setScanned(true);
+    setScanning(false);
+  } catch (e) {
+    setScanError('Could not read label — fill in manually below');
+    setScanning(false);
+    // Don't revert to camera — just show the error and let them fill in manually
+  }
+}}
               />
             ):(
               <div style={{textAlign:'center',padding:'2rem'}}><Spinner/><div style={{fontSize:13,color:'var(--color-text-secondary)',marginTop:16}}>Reading label...</div></div>

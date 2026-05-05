@@ -57,6 +57,7 @@ async function searchFDA(query) {
 }
 
 async function searchFDAWildcard(candidates) {
+  // Only use wildcard if we can verify the digits actually match
   const labelerCodes = new Set();
   candidates.forEach(c => {
     const digits = c.replace(/-/g, '');
@@ -67,22 +68,24 @@ async function searchFDAWildcard(candidates) {
   });
   for (const code of labelerCodes) {
     try {
-      const url = `https://api.fda.gov/drug/ndc.json?search=${encodeURIComponent(`product_ndc:${code}*`)}&limit=5`;
+      const url = `https://api.fda.gov/drug/ndc.json?search=${encodeURIComponent(`product_ndc:${code}*`)}&limit=10`;
       const r = await fetch(url);
       if (!r.ok) continue;
       const d = await r.json();
-      if (d.results?.length > 0) {
-        for (const result of d.results) {
-          const resultNDC = (result.product_ndc || '').replace(/-/g, '');
-          for (const candidate of candidates) {
-            const candidateClean = candidate.replace(/-/g, '');
-            if (resultNDC === candidateClean || candidateClean.includes(resultNDC) || resultNDC.includes(candidateClean.slice(0, 8))) {
-              return result;
-            }
-          }
+      if (!d.results?.length) continue;
+      // Only return if we find a result whose NDC digits
+      // actually appear in one of our candidates
+      for (const result of d.results) {
+        const resultNDC = (result.product_ndc || '').replace(/-/g, '');
+        for (const candidate of candidates) {
+          const candidateClean = candidate.replace(/-/g, '');
+          if (resultNDC === candidateClean) return result;
+          // Must match at least 8 consecutive digits
+          if (candidateClean.length >= 8 && resultNDC.includes(candidateClean.slice(0, 8))) return result;
+          if (resultNDC.length >= 8 && candidateClean.includes(resultNDC.slice(0, 8))) return result;
         }
-        return d.results[0];
       }
+      // No verified match — don't return anything from this labeler
     } catch { }
   }
   return null;
@@ -147,13 +150,7 @@ export default async function handler(req, res) {
     const wildcardResult = await searchFDAWildcard(candidates);
     if (wildcardResult) return res.status(200).json(formatResult(wildcardResult));
 
-    // Step 3 — last resort suffix search
-    try {
-      const lastNine = ndc.replace(/[^0-9]/g, '').slice(-9);
-      const url = `https://api.fda.gov/drug/ndc.json?search=${encodeURIComponent(`product_ndc:*${lastNine.slice(0, 4)}*`)}&limit=1`;
-      const r = await fetch(url);
-      if (r.ok) { const d = await r.json(); if (d.results?.[0]) return res.status(200).json(formatResult(d.results[0])); }
-    } catch { }
+    
 
     return res.status(200).json({ found: false, ndc, candidates: candidates.slice(0, 5) });
   } catch (e) {
