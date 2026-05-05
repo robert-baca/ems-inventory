@@ -1377,14 +1377,64 @@ export default function App() {
 
   async function persist(setter,data,saveFn){setter(data);setSaveStatus('Saving...');try{await saveFn(data);setSaveStatus('Saved ✓');setTimeout(()=>setSaveStatus(''),2000);}catch{setSaveStatus('Save failed');}}
 
-  const saveLibrary   =data=>persist(setLibrary,   data,api.saveLibrary);
-  const saveStock     =data=>persist(setStock,     data,d=>api.post('stock',{replace:d}));
+  // Concurrent-safe library save: sends per-item upsert/delete, re-fetches after
+  const saveLibrary = async (newData) => {
+    setLibrary(newData);
+    setSaveStatus('Saving...');
+    try {
+      const toUpsert = newData.filter(item => {
+        const orig = library.find(c => c.id === item.id);
+        return !orig || JSON.stringify(orig) !== JSON.stringify(item);
+      });
+      const toDelete = library.filter(item => !newData.find(n => n.id === item.id));
+      for (const item of toUpsert) await api.post('library', { item });
+      for (const item of toDelete) await api.post('library', { deleteId: item.id });
+      const fresh = await api.getLibrary();
+      if (Array.isArray(fresh)) setLibrary(fresh);
+      setSaveStatus('Saved ✓');
+      setTimeout(() => setSaveStatus(''), 2000);
+    } catch { setSaveStatus('Save failed'); }
+  };
+
+  // Concurrent-safe stock save: sends per-item operations, re-fetches after
+  const saveStock = async (newData) => {
+    setStock(newData);
+    setSaveStatus('Saving...');
+    try {
+      const toAdd    = newData.filter(s => !stock.find(c => c.id === s.id));
+      const toDelete = stock.filter(s => !newData.find(n => n.id === s.id));
+      const toUpdate = newData.filter(s => {
+        const orig = stock.find(c => c.id === s.id);
+        return orig && JSON.stringify(orig) !== JSON.stringify(s);
+      });
+      if (toAdd.length)    await api.post('stock', { entries:   toAdd });
+      if (toUpdate.length) await api.post('stock', { upsert:    toUpdate });
+      if (toDelete.length) await api.post('stock', { deleteIds: toDelete.map(s => s.id) });
+      const fresh = await api.getStock();
+      if (Array.isArray(fresh)) setStock(fresh);
+      setSaveStatus('Saved ✓');
+      setTimeout(() => setSaveStatus(''), 2000);
+    } catch { setSaveStatus('Save failed'); }
+  };
+
   const saveLocations =data=>persist(setLocations, data,api.saveLocations);
   const saveCategories=data=>persist(setCategories,data,api.saveCategories);
   const saveTemplates =data=>persist(setTemplates, data,api.saveTemplates);
   const saveMap       =data=>persist(setMapData,   data,api.saveMap);
 
-  const appendStock=async entries=>{try{await api.post('stock',{entries});const updated=await api.getStock();setStock(updated||[]);setSaveStatus('Saved ✓');setTimeout(()=>setSaveStatus(''),2000);}catch{setSaveStatus('Save failed');}};
+  const appendStock=async entries=>{try{await api.post('stock',{entries});const updated=await api.getStock();if(Array.isArray(updated))setStock(updated);setSaveStatus('Saved ✓');setTimeout(()=>setSaveStatus(''),2000);}catch{setSaveStatus('Save failed');}};
+
+  // Poll for remote changes every 30 s so concurrent users stay in sync
+  useEffect(()=>{
+    const id=setInterval(async()=>{
+      try{
+        const[lib,stk]=await Promise.all([api.getLibrary(),api.getStock()]);
+        if(Array.isArray(lib))setLibrary(lib);
+        if(Array.isArray(stk))setStock(stk);
+      }catch{}
+    },30000);
+    return()=>clearInterval(id);
+  },[]);
 
   if(loading)return(<div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',flexDirection:'column',gap:16}}><Spinner/><div style={{fontSize:14,color:'var(--color-text-secondary)'}}>Loading EMS Inventory...</div></div>);
 
