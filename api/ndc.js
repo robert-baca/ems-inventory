@@ -3,33 +3,28 @@ function extractCandidates(barcode) {
   const results = new Set();
   results.add(clean);
 
-  // Get the core number — strip known AI prefixes
   let core = clean;
-  if (clean.startsWith('01') && clean.length === 16) core = clean.slice(2); // remove AI "01"
+  if (clean.startsWith('01') && clean.length === 16) core = clean.slice(2);
   if (clean.startsWith('01') && clean.length === 15) core = clean.slice(2);
   results.add(core);
 
-  // Brute force: try every 10 and 11 digit substring
-  // NDC is always 10 or 11 digits
   for (let start = 0; start <= core.length - 10; start++) {
     results.add(core.slice(start, start + 10));
     if (start <= core.length - 11) results.add(core.slice(start, start + 11));
   }
 
-  // Also try with dashes in common NDC formats (5-4-2, 4-4-2, 5-3-2)
   const withDashes = new Set();
   results.forEach(r => {
     const s = r.replace(/-/g, '');
     if (s.length === 10) {
-      withDashes.add(s.slice(0,5) + '-' + s.slice(5,9) + '-' + s.slice(9,11));  // 5-4-2 (only 11 chars)
-      withDashes.add(s.slice(0,4) + '-' + s.slice(4,8) + '-' + s.slice(8,10));  // 4-4-2
-      withDashes.add(s.slice(0,5) + '-' + s.slice(5,8) + '-' + s.slice(8,10));  // 5-3-2
+      withDashes.add(s.slice(0,5) + '-' + s.slice(5,9) + '-' + s.slice(9,11));
+      withDashes.add(s.slice(0,4) + '-' + s.slice(4,8) + '-' + s.slice(8,10));
+      withDashes.add(s.slice(0,5) + '-' + s.slice(5,8) + '-' + s.slice(8,10));
     }
     if (s.length === 11) {
-      withDashes.add(s.slice(0,5) + '-' + s.slice(5,9) + '-' + s.slice(9,11));  // 5-4-2
-      withDashes.add(s.slice(0,5) + '-' + s.slice(5,8) + '-' + s.slice(8,11));  // 5-3-2 (11)
+      withDashes.add(s.slice(0,5) + '-' + s.slice(5,9) + '-' + s.slice(9,11));
+      withDashes.add(s.slice(0,5) + '-' + s.slice(5,8) + '-' + s.slice(8,11));
     }
-    // Remove leading zeros
     withDashes.add(s.replace(/^0+/, ''));
   });
   withDashes.forEach(r => results.add(r));
@@ -51,7 +46,43 @@ async function searchFDA(query) {
       if (!r.ok) continue;
       const d = await r.json();
       if (d.results?.[0]) return d.results[0];
-    } catch { /* try next */ }
+    } catch { }
+  }
+  return null;
+}
+
+// Wildcard search using first 4-5 digits of NDC + generic name hint
+async function searchFDAWildcard(candidates) {
+  // Extract likely labeler codes (first 4-5 digits)
+  const labelerCodes = new Set();
+  candidates.forEach(c => {
+    const digits = c.replace(/-/g, '');
+    if (digits.length >= 9) {
+      labelerCodes.add(digits.slice(0, 4));
+      labelerCodes.add(digits.slice(0, 5));
+    }
+  });
+
+  for (const code of labelerCodes) {
+    try {
+      const r = await fetch(`https://api.fda.gov/drug/ndc.json?search=product_ndc:${code}*&limit=5`);
+      if (!r.ok) continue;
+      const d = await r.json();
+      if (d.results?.length > 0) {
+        // Find best match by checking if full NDC digits appear in any result
+        for (const result of d.results) {
+          const resultNDC = (result.product_ndc || '').replace(/-/g, '');
+          for (const candidate of candidates) {
+            const candidateClean = candidate.replace(/-/g, '');
+            if (resultNDC === candidateClean || candidateClean.includes(resultNDC) || resultNDC.includes(candidateClean.slice(0, 8))) {
+              return result;
+            }
+          }
+        }
+        // Return first result if labeler matches
+        return d.results[0];
+      }
+    } catch { }
   }
   return null;
 }
@@ -67,7 +98,7 @@ async function searchByName(name) {
     try {
       const r = await fetch(`https://api.fda.gov/drug/ndc.json?search=${encodeURIComponent(search)}&limit=1`);
       if (r.ok) { const d = await r.json(); if (d.results?.[0]) return d.results[0]; }
-    } catch {}
+    } catch { }
   }
   return null;
 }
@@ -102,26 +133,28 @@ export default async function handler(req, res) {
 
   try {
     const candidates = extractCandidates(ndc);
-    console.log('Trying', candidates.length, 'candidates for barcode:', ndc);
 
+    // Step 1 — exact match
     for (const candidate of candidates) {
       const result = await searchFDA(candidate);
-      if (result) {
-        console.log('FOUND with candidate:', candidate);
-        return res.status(200).json(formatResult(result));
-      }
+      if (result) return res.status(200).json(formatResult(result));
     }
 
-    // Last resort - try the raw barcode as a text search
+    // Step 2 — wildcard match by labeler code
+    const wildcardResult = await searchFDAWildcard(candidates);
+    if (wildcardResult) return res.status(200).json(formatResult(wildcardResult));
+
+    // Step 3 — last resort, search by the last 9 digits
+    const lastNine = ndc.replace(/[^0-9]/g, '').slice(-9);
     try {
-      const r = await fetch(`https://api.fda.gov/drug/ndc.json?search=product_ndc:${ndc.replace(/[^0-9]/g,'').slice(-10)}&limit=1`);
+      const r = await fetch(`https://api.fda.gov/drug/ndc.json?search=product_ndc:*${lastNine.slice(0,4)}*&limit=1`);
       if (r.ok) {
         const d = await r.json();
         if (d.results?.[0]) return res.status(200).json(formatResult(d.results[0]));
       }
-    } catch {}
+    } catch { }
 
-    return res.status(200).json({ found: false, ndc, candidates: candidates.slice(0, 10) });
+    return res.status(200).json({ found: false, ndc, candidates: candidates.slice(0, 5) });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
