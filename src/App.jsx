@@ -242,107 +242,29 @@ function PackagingSelector({ value, onChange }) {
   );
 }
 
-function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual, barcodeOnly = false }) {
-  const barcodeVideoRef  = useRef(null);
-  const photoVideoRef    = useRef(null);
-  const barcodeStreamRef = useRef(null);
-  const photoStreamRef   = useRef(null);
-  const scanLoopRef      = useRef(null);
-  const detectorRef      = useRef(null);
-  const [scanMode, setScanMode]           = useState('barcode');
-  const [barcodeReady, setBarcodeReady]   = useState(false);
-  const [photoReady, setPhotoReady]       = useState(false);
-  const [err, setErr]                     = useState(null);
-  const [detectorReady, setDetectorReady] = useState(false);
-  const lastBarcodeRef = useRef(null);
-
-  useEffect(() => {
-    if ('BarcodeDetector' in window) {
-      try {
-        detectorRef.current = new window.BarcodeDetector({ formats: ['ean_13','ean_8','code_128','code_39','upc_a','upc_e','itf','data_matrix','qr_code'] });
-        setDetectorReady(true); return;
-      } catch {}
-    }
-    if (window.ZXing) { setDetectorReady(true); return; }
-    const existing = document.querySelector('script[data-zxing]');
-    if (existing) { existing.addEventListener('load', () => setDetectorReady(true)); return; }
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js';
-    script.dataset.zxing = 'true';
-    script.onload = () => setDetectorReady(true);
-    script.onerror = () => setDetectorReady(true);
-    document.head.appendChild(script);
-  }, []);
+function SmartCamera({ onPhotoCapture, onManual }) {
+  const videoRef  = useRef(null);
+  const streamRef = useRef(null);
+  const [ready, setReady] = useState(false);
+  const [err, setErr]     = useState(null);
 
   useEffect(() => {
     let active = true;
-    const constraints = { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } };
-    navigator.mediaDevices.getUserMedia(constraints)
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } })
       .then(stream => {
         if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
-        barcodeStreamRef.current = stream;
-        if (barcodeVideoRef.current) { barcodeVideoRef.current.srcObject = stream; barcodeVideoRef.current.play().then(() => setBarcodeReady(true)).catch(() => {}); }
+        streamRef.current = stream;
+        if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play().then(() => setReady(true)).catch(() => {}); }
       }).catch(() => setErr('Camera unavailable — check permissions'));
-    if (!barcodeOnly) {
-      navigator.mediaDevices.getUserMedia(constraints)
-        .then(stream => {
-          if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
-          photoStreamRef.current = stream;
-          if (photoVideoRef.current) { photoVideoRef.current.srcObject = stream; photoVideoRef.current.play().then(() => setPhotoReady(true)).catch(() => {}); }
-        }).catch(() => {});
-    }
-    return () => { active = false; cancelAnimationFrame(scanLoopRef.current); barcodeStreamRef.current?.getTracks().forEach(t => t.stop()); photoStreamRef.current?.getTracks().forEach(t => t.stop()); };
+    return () => { active = false; streamRef.current?.getTracks().forEach(t => t.stop()); };
   }, []);
 
-  useEffect(() => {
-    if (!barcodeReady || !detectorReady) return;
-    cancelAnimationFrame(scanLoopRef.current);
-    const canvas = document.createElement('canvas');
-    const ctx    = canvas.getContext('2d');
-    async function scanFrame() {
-      const video = barcodeVideoRef.current;
-      if (!video || video.readyState < 2) { scanLoopRef.current = requestAnimationFrame(scanFrame); return; }
-      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0);
-      try {
-        let barcode = null;
-        if (detectorRef.current) {
-          const results = await detectorRef.current.detect(canvas);
-          if (results.length > 0) barcode = results[0].rawValue;
-        } else if (window.ZXing) {
-          try {
-            const luminance = new window.ZXing.HTMLCanvasElementLuminanceSource(canvas);
-            const binary    = new window.ZXing.HybridBinarizer(luminance);
-            const bmp       = new window.ZXing.BinaryBitmap(binary);
-            const reader    = new window.ZXing.MultiFormatReader();
-            const result    = reader.decode(bmp);
-            if (result) barcode = result.getText();
-          } catch {}
-        }
-        if (barcode && barcode !== lastBarcodeRef.current) {
-          lastBarcodeRef.current = barcode;
-          if (video) { video.style.filter = 'brightness(2)'; setTimeout(() => { if (video) video.style.filter = ''; }, 150); }
-          cancelAnimationFrame(scanLoopRef.current);
-          barcodeStreamRef.current?.getTracks().forEach(t => t.stop());
-          photoStreamRef.current?.getTracks().forEach(t => t.stop());
-          onBarcodeResult(barcode);
-          return;
-        }
-      } catch {}
-      scanLoopRef.current = requestAnimationFrame(scanFrame);
-    }
-    scanLoopRef.current = requestAnimationFrame(scanFrame);
-    return () => cancelAnimationFrame(scanLoopRef.current);
-  }, [barcodeReady, detectorReady]);
-
   function capturePhoto() {
-    if (!photoVideoRef.current || !photoReady) return;
-    cancelAnimationFrame(scanLoopRef.current);
+    if (!videoRef.current || !ready) return;
     const c = document.createElement('canvas');
-    c.width = photoVideoRef.current.videoWidth; c.height = photoVideoRef.current.videoHeight;
-    c.getContext('2d').drawImage(photoVideoRef.current, 0, 0);
-    barcodeStreamRef.current?.getTracks().forEach(t => t.stop());
-    photoStreamRef.current?.getTracks().forEach(t => t.stop());
+    c.width = videoRef.current.videoWidth; c.height = videoRef.current.videoHeight;
+    c.getContext('2d').drawImage(videoRef.current, 0, 0);
+    streamRef.current?.getTracks().forEach(t => t.stop());
     onPhotoCapture(c.toDataURL('image/jpeg', 0.88).split(',')[1]);
   }
 
@@ -353,73 +275,28 @@ function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual, barcodeOnly = 
     </div>
   );
 
-  const isBarcode = scanMode === 'barcode';
-
   return (
     <div>
-      {!barcodeOnly && (
-        <div style={{ display: 'flex', gap: 0, marginBottom: 12, borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--color-border)' }}>
-          {[['barcode','📊 Scan Barcode'],['photo','📷 Scan Label']].map(([mode, label]) => (
-            <button key={mode} onClick={() => setScanMode(mode)} style={{ flex: 1, padding: '9px', border: 'none', background: scanMode === mode ? 'var(--color-text)' : 'var(--color-bg-secondary)', color: scanMode === mode ? 'var(--color-bg)' : 'var(--color-text-secondary)', fontWeight: scanMode === mode ? 700 : 400, cursor: 'pointer', fontFamily: 'var(--font)', fontSize: 13 }}>{label}</button>
-          ))}
-        </div>
-      )}
-
-      {/* Barcode video */}
-      <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 12, background: '#000', minHeight: 260, display: isBarcode ? 'block' : 'none' }}>
-        <video ref={barcodeVideoRef} style={{ width: '100%', display: 'block', maxHeight: 360, objectFit: 'cover', transition: 'filter 0.1s' }} playsInline muted />
-        {barcodeReady && <>
-          <div style={{ position: 'absolute', left: '8%', right: '8%', top: '38%', bottom: '38%', border: '2px solid rgba(255,255,255,0.9)', borderRadius: 8, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)' }} />
-          <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', fontSize: 12, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '5px 16px', borderRadius: 20, whiteSpace: 'nowrap' }}>
-            {detectorRef.current ? '🟢 Auto-scanning...' : '🟡 Scanner loading...'}
-          </div>
+      <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 12, background: '#000', minHeight: 260 }}>
+        <video ref={videoRef} style={{ width: '100%', display: 'block', maxHeight: 360, objectFit: 'cover' }} playsInline muted />
+        {ready && <>
+          <div style={{ position: 'absolute', inset: '18%', border: '2px solid rgba(255,255,255,0.8)', borderRadius: 10, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)' }} />
+          <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', fontSize: 12, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '5px 16px', borderRadius: 20, whiteSpace: 'nowrap' }}>Aim at the label</div>
         </>}
-        {!barcodeReady && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>Starting camera...</span></div>}
+        {!ready && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>Starting camera...</span></div>}
       </div>
-
-      {/* Photo video */}
-      {!barcodeOnly && (
-        <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 12, background: '#000', minHeight: 260, display: isBarcode ? 'none' : 'block' }}>
-          <video ref={photoVideoRef} style={{ width: '100%', display: 'block', maxHeight: 360, objectFit: 'cover' }} playsInline muted />
-          {photoReady && <>
-            <div style={{ position: 'absolute', inset: '18%', border: '2px solid rgba(255,255,255,0.8)', borderRadius: 10, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)' }} />
-            <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', fontSize: 12, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '5px 16px', borderRadius: 20, whiteSpace: 'nowrap' }}>Aim at the full label</div>
-          </>}
-          {!photoReady && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>Starting camera...</span></div>}
-        </div>
-      )}
-
-      {!barcodeOnly && !isBarcode && <button onClick={capturePhoto} disabled={!photoReady} style={{ ...btnG, width: '100%', opacity: photoReady ? 1 : 0.5, fontSize: 15, marginBottom: 10 }}>📷 Capture Label</button>}
-      {!barcodeOnly && isBarcode && <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 10 }}>No barcode? <button onClick={() => setScanMode('photo')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)', fontSize: 12, textDecoration: 'underline', fontFamily: 'var(--font)', padding: 0 }}>Switch to label scan</button></div>}
+      <button onClick={capturePhoto} disabled={!ready} style={{ ...btnG, width: '100%', opacity: ready ? 1 : 0.5, fontSize: 15, marginBottom: 10 }}>📷 Capture Label</button>
       {onManual && <button onClick={onManual} style={{ ...btnS, width: '100%', fontSize: 13 }}>✏️ Enter manually</button>}
     </div>
   );
 }
 
-function MultiPhotoScanner({ onBarcodeResult, onPhotosCapture, initialPhotos = [] }) {
-  const videoRef    = useRef(null);
-  const streamRef   = useRef(null);
-  const scanLoopRef = useRef(null);
-  const detectorRef = useRef(null);
-  const [ready, setReady]             = useState(false);
-  const [err, setErr]                 = useState(null);
-  const [detectorReady, setDetectorReady] = useState(false);
-  const [photos, setPhotos]           = useState(initialPhotos);
-  const [mode, setMode]               = useState('barcode');
-  const lastBarcodeRef = useRef(null);
-
-  useEffect(() => {
-    if ('BarcodeDetector' in window) {
-      try { detectorRef.current = new window.BarcodeDetector({ formats: ['ean_13','ean_8','code_128','code_39','upc_a','upc_e','itf','data_matrix','qr_code'] }); setDetectorReady(true); return; } catch {}
-    }
-    if (window.ZXing) { setDetectorReady(true); return; }
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js';
-    script.dataset.zxing = 'true';
-    script.onload = () => setDetectorReady(true);
-    script.onerror = () => setDetectorReady(true);
-    document.head.appendChild(script);
-  }, []);
+function MultiPhotoScanner({ onPhotosCapture, initialPhotos = [] }) {
+  const videoRef  = useRef(null);
+  const streamRef = useRef(null);
+  const [ready, setReady] = useState(false);
+  const [err, setErr]     = useState(null);
+  const [photos, setPhotos] = useState(initialPhotos);
 
   useEffect(() => {
     let active = true;
@@ -429,36 +306,8 @@ function MultiPhotoScanner({ onBarcodeResult, onPhotosCapture, initialPhotos = [
         streamRef.current = stream;
         if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play().then(() => setReady(true)); }
       }).catch(() => setErr('Camera unavailable'));
-    return () => { active = false; cancelAnimationFrame(scanLoopRef.current); streamRef.current?.getTracks().forEach(t => t.stop()); };
+    return () => { active = false; streamRef.current?.getTracks().forEach(t => t.stop()); };
   }, []);
-
-  useEffect(() => {
-    if (!ready || !detectorReady || mode !== 'barcode') return;
-    cancelAnimationFrame(scanLoopRef.current);
-    const canvas = document.createElement('canvas');
-    const ctx    = canvas.getContext('2d');
-    async function scanFrame() {
-      const video = videoRef.current;
-      if (!video || video.readyState < 2) { scanLoopRef.current = requestAnimationFrame(scanFrame); return; }
-      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0);
-      try {
-        let barcode = null;
-        if (detectorRef.current) { const results = await detectorRef.current.detect(canvas); if (results.length > 0) barcode = results[0].rawValue; }
-        if (barcode && barcode !== lastBarcodeRef.current) {
-          lastBarcodeRef.current = barcode;
-          if (video) { video.style.filter = 'brightness(2)'; setTimeout(() => { if (video) video.style.filter = ''; }, 150); }
-          cancelAnimationFrame(scanLoopRef.current);
-          streamRef.current?.getTracks().forEach(t => t.stop());
-          onBarcodeResult(barcode);
-          return;
-        }
-      } catch {}
-      scanLoopRef.current = requestAnimationFrame(scanFrame);
-    }
-    scanLoopRef.current = requestAnimationFrame(scanFrame);
-    return () => cancelAnimationFrame(scanLoopRef.current);
-  }, [ready, detectorReady, mode]);
 
   function capturePhoto() {
     if (!videoRef.current || !ready) return;
@@ -472,7 +321,6 @@ function MultiPhotoScanner({ onBarcodeResult, onPhotosCapture, initialPhotos = [
 
   function submitPhotos() {
     streamRef.current?.getTracks().forEach(t => t.stop());
-    cancelAnimationFrame(scanLoopRef.current);
     onPhotosCapture(photos);
   }
 
@@ -480,19 +328,9 @@ function MultiPhotoScanner({ onBarcodeResult, onPhotosCapture, initialPhotos = [
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 0, marginBottom: 12, borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--color-border)' }}>
-        {[['barcode','📊 Scan Barcode'],['photo','📷 Scan Label']].map(([m, label]) => (
-          <button key={m} onClick={() => setMode(m)} style={{ flex: 1, padding: '9px', border: 'none', background: mode === m ? 'var(--color-text)' : 'var(--color-bg-secondary)', color: mode === m ? 'var(--color-bg)' : 'var(--color-text-secondary)', fontWeight: mode === m ? 700 : 400, cursor: 'pointer', fontFamily: 'var(--font)', fontSize: 13 }}>{label}</button>
-        ))}
-      </div>
-
       <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 12, background: '#000', minHeight: 220 }}>
-        <video ref={videoRef} style={{ width: '100%', display: 'block', maxHeight: 300, objectFit: 'cover', transition: 'filter 0.1s' }} playsInline muted />
-        {ready && mode === 'barcode' && <>
-          <div style={{ position: 'absolute', left: '8%', right: '8%', top: '35%', bottom: '35%', border: '2px solid rgba(255,255,255,0.9)', borderRadius: 8, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)' }} />
-          <div style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', fontSize: 11, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '4px 14px', borderRadius: 20, whiteSpace: 'nowrap' }}>{detectorRef.current ? '🟢 Scanning barcode...' : '🟡 Loading...'}</div>
-        </>}
-        {ready && mode === 'photo' && <>
+        <video ref={videoRef} style={{ width: '100%', display: 'block', maxHeight: 300, objectFit: 'cover' }} playsInline muted />
+        {ready && <>
           <div style={{ position: 'absolute', inset: '15%', border: '2px solid rgba(255,255,255,0.8)', borderRadius: 10, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)' }} />
           <div style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', fontSize: 11, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '4px 14px', borderRadius: 20, whiteSpace: 'nowrap' }}>
             Photo {photos.length + 1} — {photos.length === 0 ? 'aim at drug name' : photos.length === 1 ? 'aim at expiration date' : 'any other detail'}
@@ -501,38 +339,34 @@ function MultiPhotoScanner({ onBarcodeResult, onPhotosCapture, initialPhotos = [
         {!ready && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>Starting camera...</span></div>}
       </div>
 
-      {mode === 'photo' && (
-        <>
-          <button onClick={capturePhoto} disabled={!ready || photos.length >= 3} style={{ ...btnG, width: '100%', marginBottom: 10, opacity: ready && photos.length < 3 ? 1 : 0.5 }}>
-            📷 Capture photo {photos.length + 1} {photos.length === 0 ? '— drug name' : photos.length === 1 ? '— expiration date' : '— any detail'}
-          </button>
-          {photos.length > 0 && (
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-              {photos.map((p, i) => (
-                <div key={i} style={{ position: 'relative', width: 72, height: 72, borderRadius: 8, overflow: 'hidden', flexShrink: 0 }}>
-                  <img src={`data:image/jpeg;base64,${p}`} alt="" style={{ width: 72, height: 72, objectFit: 'cover' }} />
-                  <button onClick={() => removePhoto(i)} style={{ position: 'absolute', top: 2, right: 2, background: '#dc2626', border: 'none', color: '#fff', borderRadius: '50%', width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 11 }}>×</button>
-                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 9, textAlign: 'center', padding: '2px' }}>
-                    {i === 0 ? 'Name' : i === 1 ? 'Exp date' : 'Detail'}
-                  </div>
-                </div>
-              ))}
-              {photos.length < 3 && (
-                <div style={{ width: 72, height: 72, borderRadius: 8, border: '2px dashed var(--color-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-tertiary)', fontSize: 22 }}>+</div>
-              )}
+      <button onClick={capturePhoto} disabled={!ready || photos.length >= 3} style={{ ...btnG, width: '100%', marginBottom: 10, opacity: ready && photos.length < 3 ? 1 : 0.5 }}>
+        📷 Capture photo {photos.length + 1} {photos.length === 0 ? '— drug name' : photos.length === 1 ? '— expiration date' : '— any detail'}
+      </button>
+      {photos.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          {photos.map((p, i) => (
+            <div key={i} style={{ position: 'relative', width: 72, height: 72, borderRadius: 8, overflow: 'hidden', flexShrink: 0 }}>
+              <img src={`data:image/jpeg;base64,${p}`} alt="" style={{ width: 72, height: 72, objectFit: 'cover' }} />
+              <button onClick={() => removePhoto(i)} style={{ position: 'absolute', top: 2, right: 2, background: '#dc2626', border: 'none', color: '#fff', borderRadius: '50%', width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 11 }}>×</button>
+              <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 9, textAlign: 'center', padding: '2px' }}>
+                {i === 0 ? 'Name' : i === 1 ? 'Exp date' : 'Detail'}
+              </div>
             </div>
+          ))}
+          {photos.length < 3 && (
+            <div style={{ width: 72, height: 72, borderRadius: 8, border: '2px dashed var(--color-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-tertiary)', fontSize: 22 }}>+</div>
           )}
-          {photos.length > 0 && (
-            <button onClick={submitPhotos} style={{ ...btnP, width: '100%' }}>
-              ✓ Read {photos.length} photo{photos.length !== 1 ? 's' : ''} with AI
-            </button>
-          )}
-          {photos.length === 0 && (
-            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'center', marginTop: 6 }}>
-              Take up to 3 photos — drug name, expiration date, any other detail
-            </div>
-          )}
-        </>
+        </div>
+      )}
+      {photos.length > 0 && (
+        <button onClick={submitPhotos} style={{ ...btnP, width: '100%' }}>
+          ✓ Read {photos.length} photo{photos.length !== 1 ? 's' : ''} with AI
+        </button>
+      )}
+      {photos.length === 0 && (
+        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'center', marginTop: 6 }}>
+          Take up to 3 photos — drug name, expiration date, any other detail
+        </div>
       )}
     </div>
   );
@@ -1277,13 +1111,7 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
             {!scanning?(
               <MultiPhotoScanner
                 initialPhotos={capturedPhotos}
-                onBarcodeResult={async barcode=>{
-                  setScanning(true);setScanError(null);
-                  try{const data=await api.ndcLookup(barcode);if(data.found){setForm(f=>({...f,name:data.name||f.name,notes:[data.route,data.dosageForm,data.packager].filter(Boolean).join(', ')||f.notes}));setScanned(true);}else{setScanError('Barcode not in FDA database — try photo scan or fill in manually');}}
-                  catch{setScanError('Lookup failed');}
-                  setScanning(false);
-                }}
-               onPhotosCapture={async photos => {
+                onPhotosCapture={async photos => {
   setCapturedPhotos(photos);
   setScanning(true); setScanError(null);
   try {
@@ -1363,29 +1191,12 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
   const [count,setCount]=useState('');
   const [expirations,setExpirations]=useState([]);
   const [sessionCount,setSessionCount]=useState(0);
-  const [autoLabelScan,setAutoLabelScan]=useState(false);
   const quick=[1,2,3,4,5,6];
-
-  async function handleBarcode(barcode){
-    setPhase('scanning');
-    try{
-      const ndcData=await api.ndcLookup(barcode);
-      if(ndcData.found){
-        let matched=library.find(d=>d.barcode===barcode);
-        if(!matched){const searchTerms=[ndcData.genericName?.toLowerCase().split(' ')[0],ndcData.brandName?.toLowerCase().split(' ')[0]].filter(Boolean);for(const term of searchTerms){matched=library.find(d=>d.name?.toLowerCase().includes(term));if(matched)break;}}
-        setScanResult({matchedName:ndcData.name,barcode,expiration:null,lot:null,matchedId:matched?.id||null,fromBarcode:true,packager:ndcData.packager,dosageForm:ndcData.dosageForm,route:ndcData.route,ndcFound:true});
-        setMatchedItem(matched||null);setPhase('location');return;
-      }
-      const libraryMatch=library.find(d=>d.barcode===barcode);
-      if(libraryMatch){setScanResult({matchedName:libraryMatch.name,barcode,matchedId:libraryMatch.id,fromBarcode:true,ndcFound:false});setMatchedItem(libraryMatch);setPhase('location');return;}
-      setPhase('camera');setAutoLabelScan(true);
-    }catch(e){alert('Lookup failed: '+e.message);setPhase('camera');}
-  }
 
   async function handlePhoto(b64){setCapturedPhoto(b64);setPhase('scanning');try{const result=await api.quickscan(b64,library.filter(d=>d.status!=='inactive'));setScanResult(result);setMatchedItem(result.matchedId?library.find(d=>d.id===result.matchedId)||null:null);setPhase('location');}catch(e){alert('Scan error: '+e.message);setPhase('camera');}}
   function handleCountNext(){const n=parseInt(count);if(!n||n<1)return;setExpirations(Array(n).fill(scanResult?.expiration||''));setPhase('expirations');}
-  async function handleSave(){const newEntries=expirations.map(exp=>({id:uid(),libraryId:matchedItem.id,locationId:selectedLocation,expiration:exp||'NA',status:'active',addedAt:new Date().toISOString(),lot:scanResult?.lot||'',barcode:scanResult?.barcode||''}));if(onAppendStock){await onAppendStock(newEntries);}else{onSaveStock([...stock,...newEntries]);}setSessionCount(c=>c+parseInt(count));setAutoLabelScan(false);setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);}
-  function reset(){setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);setAutoLabelScan(false);}
+  async function handleSave(){const newEntries=expirations.map(exp=>({id:uid(),libraryId:matchedItem.id,locationId:selectedLocation,expiration:exp||'NA',status:'active',addedAt:new Date().toISOString(),lot:scanResult?.lot||'',barcode:scanResult?.barcode||''}));if(onAppendStock){await onAppendStock(newEntries);}else{onSaveStock([...stock,...newEntries]);}setSessionCount(c=>c+parseInt(count));setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);}
+  function reset(){setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);}
 
   if(phase==='camera')return(
     <div>
@@ -1395,9 +1206,8 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
         {sessionCount>0&&<span style={{fontSize:13,color:'var(--color-success-text)',fontWeight:600}}>{sessionCount} added</span>}
       </div>
       <div style={{padding:'0 20px'}}>
-        {autoLabelScan&&<div style={{background:'var(--color-warning-bg)',border:'1px solid var(--color-warning-border)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:12,fontSize:12,color:'var(--color-warning-text)',textAlign:'center'}}>⚠ Barcode not in FDA database — add this item to your library manually</div>}
-        <div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'8px 14px',marginBottom:14,fontSize:12,color:'var(--color-text-secondary)',textAlign:'center'}}>Scan barcode for instant lookup</div>
-        <SmartCamera onBarcodeResult={handleBarcode} onPhotoCapture={handlePhoto} onManual={()=>{setScanResult({});setPhase('location');}} barcodeOnly={true}/>
+        <div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'8px 14px',marginBottom:14,fontSize:12,color:'var(--color-text-secondary)',textAlign:'center'}}>Aim at the item label — AI will identify it</div>
+        <SmartCamera onPhotoCapture={handlePhoto} onManual={()=>{setScanResult({});setPhase('location');}}/>
       </div>
     </div>
   );
@@ -1411,13 +1221,12 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
         {matchedItem?(
           <div style={{background:'var(--color-success-bg)',border:'1px solid var(--color-success-border)',borderRadius:'var(--radius-lg)',padding:'12px 14px',marginBottom:16,display:'flex',alignItems:'center',gap:12}}>
             {matchedItem.profilePhoto&&<img src={`data:image/jpeg;base64,${matchedItem.profilePhoto}`} alt="" style={{width:44,height:44,objectFit:'cover',borderRadius:8,flexShrink:0}}/>}
-            <div><div style={{fontSize:12,color:'var(--color-success-text)',fontWeight:700}}>✓ Found in library</div><div style={{fontSize:15,fontWeight:700}}>{matchedItem.name}</div>{scanResult?.fromBarcode&&scanResult?.packager&&<div style={{fontSize:11,color:'var(--color-text-tertiary)',marginTop:2}}>{scanResult.packager}</div>}{scanResult?.expiration&&<div style={{fontSize:12,color:'var(--color-text-secondary)',marginTop:2}}>Exp: {scanResult.expiration}</div>}</div>
+            <div><div style={{fontSize:12,color:'var(--color-success-text)',fontWeight:700}}>✓ Found in library</div><div style={{fontSize:15,fontWeight:700}}>{matchedItem.name}</div>{scanResult?.expiration&&<div style={{fontSize:12,color:'var(--color-text-secondary)',marginTop:2}}>Exp: {scanResult.expiration}</div>}</div>
           </div>
         ):(
           <div style={{background:'var(--color-warning-bg)',border:'1px solid var(--color-warning-border)',borderRadius:'var(--radius-lg)',padding:'12px 14px',marginBottom:16}}>
-            <div style={{fontSize:12,color:'var(--color-warning-text)',fontWeight:700,marginBottom:4}}>{scanResult?.fromBarcode?'📊 Identified — not in library':'⚠ Not in library'}</div>
+            <div style={{fontSize:12,color:'var(--color-warning-text)',fontWeight:700,marginBottom:4}}>⚠ Not in library</div>
             <div style={{fontSize:15,fontWeight:700}}>{scanResult?.matchedName||'Unknown'}</div>
-            {scanResult?.fromBarcode&&<div style={{fontSize:12,color:'var(--color-text-secondary)',marginTop:4}}>{[scanResult.dosageForm,scanResult.route,scanResult.packager].filter(Boolean).join(' · ')}</div>}
           </div>
         )}
         {!matchedItem?(
