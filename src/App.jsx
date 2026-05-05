@@ -396,7 +396,7 @@ function SmartCamera({ onBarcodeResult, onPhotoCapture, onManual, barcodeOnly = 
   );
 }
 
-function MultiPhotoScanner({ onBarcodeResult, onPhotosCapture }) {
+function MultiPhotoScanner({ onBarcodeResult, onPhotosCapture, initialPhotos = [] }) {
   const videoRef    = useRef(null);
   const streamRef   = useRef(null);
   const scanLoopRef = useRef(null);
@@ -404,7 +404,7 @@ function MultiPhotoScanner({ onBarcodeResult, onPhotosCapture }) {
   const [ready, setReady]             = useState(false);
   const [err, setErr]                 = useState(null);
   const [detectorReady, setDetectorReady] = useState(false);
-  const [photos, setPhotos]           = useState([]);
+  const [photos, setPhotos]           = useState(initialPhotos);
   const [mode, setMode]               = useState('barcode');
   const lastBarcodeRef = useRef(null);
 
@@ -1251,6 +1251,7 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
   const [photo,setPhoto]=useState(existing?.profilePhoto||capturedPhoto||null);
   const [scanning,setScanning]=useState(false);
   const [scanError,setScanError]=useState(null);
+  const [capturedPhotos,setCapturedPhotos]=useState([]);
   const [scanned,setScanned]=useState(!!(scanData&&Object.values(scanData).some(v=>v)));
   const [saving,setSaving]=useState(false);
   const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
@@ -1274,6 +1275,7 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
           <div style={{marginBottom:16}}>
             {!scanning?(
               <MultiPhotoScanner
+                initialPhotos={capturedPhotos}
                 onBarcodeResult={async barcode=>{
                   setScanning(true);setScanError(null);
                   try{const data=await api.ndcLookup(barcode);if(data.found){setForm(f=>({...f,name:data.name||f.name,notes:[data.route,data.dosageForm,data.packager].filter(Boolean).join(', ')||f.notes}));setScanned(true);}else{setScanError('Barcode not in FDA database — try photo scan or fill in manually');}}
@@ -1281,6 +1283,7 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
                   setScanning(false);
                 }}
                onPhotosCapture={async photos => {
+  setCapturedPhotos(photos);
   setScanning(true); setScanError(null);
   try {
     const result = await api.scan(photos);
@@ -1294,12 +1297,12 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
       notes:         result.notes         || f.notes,
     }));
     if (!photo && photos[0]) setPhoto(await resizeImage(photos[0], 400));
+    setCapturedPhotos([]);
     setScanned(true);
     setScanning(false);
   } catch (e) {
     setScanError('Could not read label — fill in manually below');
     setScanning(false);
-    // Don't revert to camera — just show the error and let them fill in manually
   }
 }}
               />
