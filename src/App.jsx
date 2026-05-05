@@ -483,8 +483,9 @@ function MultiPhotoScanner({ onPhotosCapture, initialPhotos = [] }) {
   );
 }
 
-function HomeView({ library, stock, locations, categories, navigate }) {
+function HomeView({ library, stock, locations, categories, navigate, onSaveStock }) {
   const [alertModal, setAlertModal] = useState(null);
+  const [editingEntry, setEditingEntry] = useState(null);
   const active      = stock.filter(s => s.status === 'active');
   const validActive = active.filter(s => library.find(d => d.id === s.libraryId));
   const expired     = validActive.filter(s => getStatus(s.expiration).type === 'expired');
@@ -625,7 +626,10 @@ function HomeView({ library, stock, locations, categories, navigate }) {
                           <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{entry.expiration === 'NA' ? 'N/A' : entry.expiration || '—'}</span>
                           {loc && <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginLeft: 8 }}>📍 {loc.name}</span>}
                         </div>
-                        <Badge type={st.type} label={st.label} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Badge type={st.type} label={st.label} />
+                          <button onClick={() => setEditingEntry(entry)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-tertiary)', fontSize: 14, lineHeight: 1 }}>✏️</button>
+                        </div>
                       </div>
                     );
                   })}
@@ -634,6 +638,13 @@ function HomeView({ library, stock, locations, categories, navigate }) {
             })}
           </div>
         </div>
+      )}
+      {editingEntry && (
+        <EditExpirationModal
+          entry={editingEntry}
+          onClose={() => setEditingEntry(null)}
+          onSave={exp => { onSaveStock(stock.map(s => s.id === editingEntry.id ? { ...s, expiration: exp || 'NA' } : s)); setEditingEntry(null); }}
+        />
       )}
     </div>
   );
@@ -925,6 +936,8 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
   const [filter, setFilter]         = useState('all');
   const [search, setSearch]         = useState('');
   const [movingItem, setMovingItem] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+  const [editingEntry, setEditingEntry] = useState(null);
   const [moveQty, setMoveQty]       = useState('');
   const [moveFrom, setMoveFrom]     = useState('supply-room');
   const [moveTo, setMoveTo]         = useState('');
@@ -999,15 +1012,43 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
                 <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end',flexShrink:0}}>
                   {hasIssue&&<Badge type={worst} label={worst==='expired'?'EXPIRED':'EXP SOON'}/>}
                   <div style={{display:'flex',gap:6}}>
+                    <button onClick={()=>setExpandedId(expandedId===item.id?null:item.id)} style={{...btnS,padding:'5px 10px',fontSize:12}}>{expandedId===item.id?'▲':'▼'}</button>
                     <button onClick={()=>openMove(item)} style={{...btnS,padding:'5px 12px',fontSize:12}}>Move</button>
                     <button onClick={()=>{if(!window.confirm(`Remove all ${item.name} stock?`))return;onSaveStock(stock.filter(s=>s.libraryId!==item.id));}} style={{...btnS,padding:'5px 12px',fontSize:12,color:'var(--color-danger-text)',borderColor:'var(--color-danger-border)'}}>Delete</button>
                   </div>
                 </div>
               </div>
+              {expandedId===item.id&&(
+                <div style={{borderTop:'1px solid var(--color-border)'}}>
+                  {sortedEntries.map((entry,i)=>{
+                    const st=getStatus(entry.expiration);const es=SS[st.type];
+                    const loc=locations.find(l=>l.id===entry.locationId);
+                    return(
+                      <div key={entry.id} style={{display:'flex',alignItems:'center',padding:'8px 14px',borderTop:i>0?'1px solid var(--color-border)':'none'}}>
+                        <div style={{flex:1}}>
+                          <span style={{fontSize:14,fontWeight:700,fontFamily:'var(--font-mono)'}}>{entry.expiration==='NA'?'N/A':entry.expiration||'—'}</span>
+                          {loc&&<span style={{fontSize:11,color:'var(--color-text-tertiary)',marginLeft:8}}>📍 {loc.name}</span>}
+                        </div>
+                        <div style={{display:'flex',alignItems:'center',gap:8}}>
+                          <Badge type={st.type} label={st.label}/>
+                          <button onClick={()=>setEditingEntry(entry)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--color-text-tertiary)',fontSize:14,lineHeight:1}}>✏️</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })}
       </div>
+      {editingEntry&&(
+        <EditExpirationModal
+          entry={editingEntry}
+          onClose={()=>setEditingEntry(null)}
+          onSave={exp=>{onSaveStock(stock.map(s=>s.id===editingEntry.id?{...s,expiration:exp||'NA'}:s));setEditingEntry(null);}}
+        />
+      )}
       {movingItem&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',display:'flex',alignItems:'flex-end',zIndex:200}}>
           <div style={{width:'100%',maxWidth:680,margin:'0 auto',background:'var(--color-bg)',borderRadius:'20px 20px 0 0',padding:'24px 20px 36px',maxHeight:'85vh',overflow:'auto'}}>
@@ -1596,7 +1637,7 @@ export default function App() {
   return(
     <div style={{width:'100%',maxWidth:isDesktop&&view==='map'?'100%':680,paddingBottom:72,background:'var(--color-bg)',minHeight:'100vh',margin:'0 auto',boxShadow:isDesktop?'0 0 0 1px rgba(0,0,0,0.06)':undefined}}>
       {saveStatus&&<div style={{position:'fixed',top:16,left:'50%',transform:'translateX(-50%)',background:'var(--color-text)',color:'var(--color-bg)',padding:'6px 18px',borderRadius:20,fontSize:12,fontWeight:500,zIndex:400,whiteSpace:'nowrap',boxShadow:'0 2px 8px rgba(0,0,0,0.2)'}}>{saveStatus}</div>}
-      {view==='home'           &&<HomeView {...sharedProps}/>}
+      {view==='home'           &&<HomeView {...sharedProps} onSaveStock={saveStock}/>}
       {view==='locations'      &&!isDesktop&&<LocationsView {...sharedProps} onSaveLocations={saveLocations}/>}
       {view==='map'            &&<MapView {...sharedProps} mapData={mapData} onSaveMap={saveMap}/>}
       {view==='locationdetail' &&<LocationDetailView {...sharedProps} locationId={params.locationId} onSaveStock={saveStock}/>}
