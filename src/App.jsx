@@ -1502,8 +1502,7 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
 
   async function handleBarcode(barcode) {
   // DEBUG — show exactly what was scanned
-  console.log('RAW BARCODE:', barcode);
-  alert('DEBUG - Raw barcode: ' + barcode + '\n\nLength: ' + barcode.length);
+
   setPhase('scanning');
   try {
     const ndcData = await api.ndcLookup(barcode);

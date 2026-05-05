@@ -1,68 +1,73 @@
 function parseGS1(barcode) {
   const clean = barcode.replace(/[^0-9]/g, '');
-  const results = [];
+  const results = new Set();
 
-  // Direct attempts with the raw barcode
-  results.push(clean);
+  results.add(clean);
 
-  // GS1-128 Application Identifier parsing
-  // AI (01) = GTIN-14, always 14 digits
-  // AI (17) = expiration YYMMDD, 6 digits  
-  // AI (10) = lot number, variable
-  // AI (21) = serial, variable
-  let i = 0;
-  const ais = {};
-  const str = clean;
-
-  // Try to find AI 01 (GTIN) in the string
-  for (let pos = 0; pos < str.length - 14; pos++) {
-    if (str.slice(pos, pos+2) === '01') {
-      const gtin = str.slice(pos+2, pos+16);
-      if (gtin.length === 14) {
-        ais['01'] = gtin;
-        // Extract NDC from GTIN-14
-        // Format: [1 indicator][5 labeler][4 product][2 package][1 check]
-        const inner = gtin.slice(1, 13); // 12 digits after indicator, before check
-        results.push(inner);
-        results.push(inner.slice(1)); // 11 digits
-        // Try splitting as NDC 5-4-2
-        const labeler = inner.slice(1, 6);
-        const product = inner.slice(6, 10);
-        const pkg     = inner.slice(10, 12);
-        results.push(`${labeler}-${product}-${pkg}`);
-        results.push(`${labeler}${product}${pkg}`);
-        // Also try removing leading zero from labeler
-        results.push(`${labeler.replace(/^0/,'')}-${product}-${pkg}`);
-      }
-    }
+  // Handle GS1 with AI prefix "01" + 14 digit GTIN
+  // Raw: 01 + 14 digits = 16 total
+  if (clean.length === 16 && clean.startsWith('01')) {
+    const gtin14 = clean.slice(2); // remove "01" prefix → 14 digits
+    results.add(gtin14);
+    // Strip indicator (first digit) and check digit (last digit) → 12 digits
+    const inner12 = gtin14.slice(1, 13);
+    results.add(inner12);
+    // Strip just leading digit → 13 digits
+    const inner13 = gtin14.slice(1);
+    results.add(inner13);
+    // NDC is usually in positions 2-11 of the GTIN-14
+    // Format: [indicator][5 labeler][4 product][2 package][check]
+    const labeler = gtin14.slice(1, 6);
+    const product = gtin14.slice(6, 10);
+    const pkg     = gtin14.slice(10, 12);
+    results.add(`${labeler}-${product}-${pkg}`);
+    results.add(`${labeler}${product}${pkg}`);
+    // Remove leading zeros from labeler
+    results.add(`${labeler.replace(/^0+/, '')}-${product}-${pkg}`);
+    // Try shifting by one
+    const labeler2 = gtin14.slice(2, 7);
+    const product2 = gtin14.slice(7, 11);
+    const pkg2     = gtin14.slice(11, 13);
+    results.add(`${labeler2}-${product2}-${pkg2}`);
+    results.add(`${labeler2}${product2}${pkg2}`);
+    results.add(`${labeler2.replace(/^0+/, '')}-${product2}-${pkg2}`);
   }
 
-  // Standard GTIN-14 (14 digits)
+  // Standard GTIN-14 (14 digits, no AI prefix)
   if (clean.length === 14) {
-    const inner = clean.slice(1, 13);
-    results.push(inner);
-    results.push(inner.slice(1));
-    results.push(clean.slice(1,6) + '-' + clean.slice(6,10) + '-' + clean.slice(10,12));
-    results.push(clean.slice(2,7) + '-' + clean.slice(7,11) + '-' + clean.slice(11,13));
+    const inner12 = clean.slice(1, 13);
+    results.add(inner12);
+    results.add(inner12.slice(1));
+    const labeler = clean.slice(1, 6);
+    const product = clean.slice(6, 10);
+    const pkg     = clean.slice(10, 12);
+    results.add(`${labeler}-${product}-${pkg}`);
+    results.add(`${labeler.replace(/^0+/, '')}-${product}-${pkg}`);
   }
 
-  // UPC-A / GTIN-12
+  // GTIN-12 / UPC-A
   if (clean.length === 12) {
-    results.push(clean.slice(0,11));
-    results.push(clean.slice(1,11));
-    results.push(clean.slice(1,6)+'-'+clean.slice(6,10)+'-'+clean.slice(10,12));
+    results.add(clean.slice(0, 11));
+    results.add(clean.slice(1, 11));
+    results.add(clean.slice(1, 6) + '-' + clean.slice(6, 10) + '-' + clean.slice(10, 12));
   }
 
   // EAN-13
   if (clean.length === 13) {
-    results.push(clean.slice(1,12));
-    results.push(clean.slice(0,12));
+    results.add(clean.slice(1, 12));
+    results.add(clean.slice(0, 12));
   }
 
-  // Also try removing all leading zeros from each attempt
-  const withoutLeading = results.map(r => r.replace(/^0+/, ''));
+  // Add versions with dashes stripped and leading zeros removed
+  const extras = new Set();
+  results.forEach(r => {
+    extras.add(r.replace(/-/g, ''));
+    extras.add(r.replace(/^0+/, ''));
+    extras.add(r.replace(/-/g, '').replace(/^0+/, ''));
+  });
+  extras.forEach(e => results.add(e));
 
-  return [...new Set([...results, ...withoutLeading])].filter(a => a.replace(/-/g,'').length >= 9);
+  return [...results].filter(a => a.replace(/-/g, '').length >= 9);
 }
 
 async function searchFDA(query) {
@@ -131,12 +136,12 @@ export default async function handler(req, res) {
 
   try {
     const candidates = parseGS1(ndc);
-    console.log('NDC candidates for', ndc, ':', candidates);
+    console.log('Trying NDC candidates:', candidates);
     for (const candidate of candidates) {
       const result = await searchFDA(candidate);
       if (result) return res.status(200).json(formatResult(result));
     }
-    return res.status(200).json({ found: false, ndc, tried: candidates.slice(0, 5) });
+    return res.status(200).json({ found: false, ndc, tried: candidates.slice(0, 8) });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
