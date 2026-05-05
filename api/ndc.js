@@ -1,90 +1,56 @@
-function parseGS1(barcode) {
+function extractCandidates(barcode) {
   const clean = barcode.replace(/[^0-9]/g, '');
   const results = new Set();
-
   results.add(clean);
 
-  // Handle GS1 with AI prefix "01" + 14 digit GTIN
-  // Raw: 01 + 14 digits = 16 total
-  if (clean.length === 16 && clean.startsWith('01')) {
-    const gtin14 = clean.slice(2); // remove "01" prefix → 14 digits
-    results.add(gtin14);
-    // Strip indicator (first digit) and check digit (last digit) → 12 digits
-    const inner12 = gtin14.slice(1, 13);
-    results.add(inner12);
-    // Strip just leading digit → 13 digits
-    const inner13 = gtin14.slice(1);
-    results.add(inner13);
-    // NDC is usually in positions 2-11 of the GTIN-14
-    // Format: [indicator][5 labeler][4 product][2 package][check]
-    const labeler = gtin14.slice(1, 6);
-    const product = gtin14.slice(6, 10);
-    const pkg     = gtin14.slice(10, 12);
-    results.add(`${labeler}-${product}-${pkg}`);
-    results.add(`${labeler}${product}${pkg}`);
-    // Remove leading zeros from labeler
-    results.add(`${labeler.replace(/^0+/, '')}-${product}-${pkg}`);
-    // Try shifting by one
-    const labeler2 = gtin14.slice(2, 7);
-    const product2 = gtin14.slice(7, 11);
-    const pkg2     = gtin14.slice(11, 13);
-    results.add(`${labeler2}-${product2}-${pkg2}`);
-    results.add(`${labeler2}${product2}${pkg2}`);
-    results.add(`${labeler2.replace(/^0+/, '')}-${product2}-${pkg2}`);
+  // Get the core number — strip known AI prefixes
+  let core = clean;
+  if (clean.startsWith('01') && clean.length === 16) core = clean.slice(2); // remove AI "01"
+  if (clean.startsWith('01') && clean.length === 15) core = clean.slice(2);
+  results.add(core);
+
+  // Brute force: try every 10 and 11 digit substring
+  // NDC is always 10 or 11 digits
+  for (let start = 0; start <= core.length - 10; start++) {
+    results.add(core.slice(start, start + 10));
+    if (start <= core.length - 11) results.add(core.slice(start, start + 11));
   }
 
-  // Standard GTIN-14 (14 digits, no AI prefix)
-  if (clean.length === 14) {
-    const inner12 = clean.slice(1, 13);
-    results.add(inner12);
-    results.add(inner12.slice(1));
-    const labeler = clean.slice(1, 6);
-    const product = clean.slice(6, 10);
-    const pkg     = clean.slice(10, 12);
-    results.add(`${labeler}-${product}-${pkg}`);
-    results.add(`${labeler.replace(/^0+/, '')}-${product}-${pkg}`);
-  }
-
-  // GTIN-12 / UPC-A
-  if (clean.length === 12) {
-    results.add(clean.slice(0, 11));
-    results.add(clean.slice(1, 11));
-    results.add(clean.slice(1, 6) + '-' + clean.slice(6, 10) + '-' + clean.slice(10, 12));
-  }
-
-  // EAN-13
-  if (clean.length === 13) {
-    results.add(clean.slice(1, 12));
-    results.add(clean.slice(0, 12));
-  }
-
-  // Add versions with dashes stripped and leading zeros removed
-  const extras = new Set();
+  // Also try with dashes in common NDC formats (5-4-2, 4-4-2, 5-3-2)
+  const withDashes = new Set();
   results.forEach(r => {
-    extras.add(r.replace(/-/g, ''));
-    extras.add(r.replace(/^0+/, ''));
-    extras.add(r.replace(/-/g, '').replace(/^0+/, ''));
+    const s = r.replace(/-/g, '');
+    if (s.length === 10) {
+      withDashes.add(s.slice(0,5) + '-' + s.slice(5,9) + '-' + s.slice(9,11));  // 5-4-2 (only 11 chars)
+      withDashes.add(s.slice(0,4) + '-' + s.slice(4,8) + '-' + s.slice(8,10));  // 4-4-2
+      withDashes.add(s.slice(0,5) + '-' + s.slice(5,8) + '-' + s.slice(8,10));  // 5-3-2
+    }
+    if (s.length === 11) {
+      withDashes.add(s.slice(0,5) + '-' + s.slice(5,9) + '-' + s.slice(9,11));  // 5-4-2
+      withDashes.add(s.slice(0,5) + '-' + s.slice(5,8) + '-' + s.slice(8,11));  // 5-3-2 (11)
+    }
+    // Remove leading zeros
+    withDashes.add(s.replace(/^0+/, ''));
   });
-  extras.forEach(e => results.add(e));
+  withDashes.forEach(r => results.add(r));
 
-  return [...results].filter(a => a.replace(/-/g, '').length >= 9);
+  return [...results].filter(r => r.replace(/-/g,'').length >= 9);
 }
 
 async function searchFDA(query) {
   const clean = query.replace(/-/g, '');
-  const searches = [
-    `product_ndc:"${query}"`,
-    `package_ndc:"${query}"`,
-    `product_ndc:"${clean}"`,
-    `package_ndc:"${clean}"`,
+  const urls = [
+    `https://api.fda.gov/drug/ndc.json?search=product_ndc:"${query}"&limit=1`,
+    `https://api.fda.gov/drug/ndc.json?search=package_ndc:"${query}"&limit=1`,
+    `https://api.fda.gov/drug/ndc.json?search=product_ndc:"${clean}"&limit=1`,
+    `https://api.fda.gov/drug/ndc.json?search=package_ndc:"${clean}"&limit=1`,
   ];
-  for (const search of searches) {
+  for (const url of urls) {
     try {
-      const r = await fetch(`https://api.fda.gov/drug/ndc.json?search=${encodeURIComponent(search)}&limit=1`);
-      if (r.ok) {
-        const d = await r.json();
-        if (d.results?.[0]) return d.results[0];
-      }
+      const r = await fetch(url);
+      if (!r.ok) continue;
+      const d = await r.json();
+      if (d.results?.[0]) return d.results[0];
     } catch { /* try next */ }
   }
   return null;
@@ -94,8 +60,8 @@ async function searchByName(name) {
   const searches = [
     `brand_name:"${name}"`,
     `generic_name:"${name}"`,
-    `brand_name:${name}`,
-    `generic_name:${name}`,
+    `brand_name:${name}*`,
+    `generic_name:${name}*`,
   ];
   for (const search of searches) {
     try {
@@ -135,13 +101,27 @@ export default async function handler(req, res) {
   if (!ndc) return res.status(400).json({ error: 'NDC or name required' });
 
   try {
-    const candidates = parseGS1(ndc);
-    console.log('Trying NDC candidates:', candidates);
+    const candidates = extractCandidates(ndc);
+    console.log('Trying', candidates.length, 'candidates for barcode:', ndc);
+
     for (const candidate of candidates) {
       const result = await searchFDA(candidate);
-      if (result) return res.status(200).json(formatResult(result));
+      if (result) {
+        console.log('FOUND with candidate:', candidate);
+        return res.status(200).json(formatResult(result));
+      }
     }
-    return res.status(200).json({ found: false, ndc, tried: candidates.slice(0, 8) });
+
+    // Last resort - try the raw barcode as a text search
+    try {
+      const r = await fetch(`https://api.fda.gov/drug/ndc.json?search=product_ndc:${ndc.replace(/[^0-9]/g,'').slice(-10)}&limit=1`);
+      if (r.ok) {
+        const d = await r.json();
+        if (d.results?.[0]) return res.status(200).json(formatResult(d.results[0]));
+      }
+    } catch {}
+
+    return res.status(200).json({ found: false, ndc, candidates: candidates.slice(0, 10) });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
