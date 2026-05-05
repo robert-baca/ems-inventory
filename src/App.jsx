@@ -679,6 +679,7 @@ function LocationDetailView({ locationId, locations, library, stock, categories,
   const loc = locations.find(l => l.id === locationId);
   const [activeTab, setActiveTab] = useState(null);
   const [movingItem, setMovingItem] = useState(null);
+  const [editingEntry, setEditingEntry] = useState(null);
   const [moveQty, setMoveQty]     = useState(1);
   const [moveTo, setMoveTo]       = useState('');
   if (!loc) return null;
@@ -732,6 +733,7 @@ function LocationDetailView({ locationId, locations, library, stock, categories,
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <Badge type={st.type} label={st.label} />
+                      <button onClick={() => setEditingEntry(entry)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-tertiary)', fontSize: 14, lineHeight: 1 }}>✏️</button>
                       <button onClick={() => { if (window.confirm('Pull this unit?')) onSaveStock(stock.map(s => s.id === entry.id ? { ...s, status: 'pulled', pulledAt: new Date().toISOString() } : s)); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-tertiary)', fontSize: 18, lineHeight: 1 }}>×</button>
                     </div>
                   </div>
@@ -741,6 +743,13 @@ function LocationDetailView({ locationId, locations, library, stock, categories,
           );
         })}
       </div>
+      {editingEntry && (
+        <EditExpirationModal
+          entry={editingEntry}
+          onClose={() => setEditingEntry(null)}
+          onSave={exp => { onSaveStock(stock.map(s => s.id === editingEntry.id ? { ...s, expiration: exp || 'NA' } : s)); setEditingEntry(null); }}
+        />
+      )}
       {movingItem && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', zIndex: 200 }}>
           <div style={{ width: '100%', maxWidth: 680, margin: '0 auto', background: 'var(--color-bg)', borderRadius: '20px 20px 0 0', padding: '24px 20px 36px' }}>
@@ -1046,9 +1055,26 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
   );
 }
 
+function EditExpirationModal({ entry, onSave, onClose }) {
+  const [exp, setExp] = useState(entry.expiration || '');
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', zIndex: 200 }} onClick={onClose}>
+      <div style={{ width: '100%', maxWidth: 680, margin: '0 auto', background: 'var(--color-bg)', borderRadius: '20px 20px 0 0', padding: '24px 20px 36px' }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>Edit expiration date</div>
+        <ExpirationInput value={exp} onChange={setExp} />
+        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+          <button onClick={onClose} style={{ ...btnS, flex: 1 }}>Cancel</button>
+          <button onClick={() => onSave(exp)} style={{ ...btnP, flex: 2 }}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DrugDetailView({ libraryId, library, stock, locations, categories, navigate, onSaveStock, onSaveLibrary }) {
   const item = library.find(d => d.id === libraryId);
   const [showPulled, setShowPulled] = useState(false);
+  const [editingEntry, setEditingEntry] = useState(null);
   if (!item) return (
     <div style={{padding:20}}>
       <TopBar title="Item Detail" onBack={()=>navigate(-1)}/>
@@ -1103,7 +1129,10 @@ function DrugDetailView({ libraryId, library, stock, locations, categories, navi
               </div>
               <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6}}>
                 <Badge type={st.type} label={st.label}/>
-                <button onClick={()=>{if(window.confirm('Pull this unit?'))onSaveStock(stock.map(s=>s.id===entry.id?{...s,status:'pulled',pulledAt:new Date().toISOString()}:s));}} style={{background:'none',border:'1px solid var(--color-border)',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'var(--color-text-secondary)',fontFamily:'var(--font)'}}>Pull</button>
+                <div style={{display:'flex',gap:6}}>
+                  <button onClick={()=>setEditingEntry(entry)} style={{background:'none',border:'1px solid var(--color-border)',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'var(--color-text-secondary)',fontFamily:'var(--font)'}}>Edit exp</button>
+                  <button onClick={()=>{if(window.confirm('Pull this unit?'))onSaveStock(stock.map(s=>s.id===entry.id?{...s,status:'pulled',pulledAt:new Date().toISOString()}:s));}} style={{background:'none',border:'1px solid var(--color-border)',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'var(--color-text-secondary)',fontFamily:'var(--font)'}}>Pull</button>
+                </div>
               </div>
             </div>
           );
@@ -1120,6 +1149,13 @@ function DrugDetailView({ libraryId, library, stock, locations, categories, navi
           </div>
         )}
       </div>
+      {editingEntry && (
+        <EditExpirationModal
+          entry={editingEntry}
+          onClose={() => setEditingEntry(null)}
+          onSave={exp => { onSaveStock(stock.map(s => s.id === editingEntry.id ? { ...s, expiration: exp || 'NA' } : s)); setEditingEntry(null); }}
+        />
+      )}
     </div>
   );
 }
