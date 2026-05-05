@@ -1228,7 +1228,7 @@ function LibraryView({ library, stock, categories, navigate }) {
 function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locations, categories, navigate, onSaveLibrary, onSaveStock }) {
   const existing=libraryId?library.find(d=>d.id===libraryId):null;
   const fileRef=useRef(null);
-  const [form,setForm]=useState({name:existing?.name||scanData?.name||'',category:existing?.category||scanData?.category||categories[0]?.id||'',packagingType:existing?.packagingType||scanData?.packagingType||'vial',unit:existing?.unit||scanData?.unit||'',size:existing?.size||scanData?.size||'',notes:existing?.notes||scanData?.notes||'',stationPar:existing?.stationPar||'',status:existing?.status||'active'});
+  const [form,setForm]=useState({name:existing?.name||scanData?.name||'',category:existing?.category||scanData?.category||categories[0]?.id||'',packagingType:existing?.packagingType||scanData?.packagingType||'vial',unit:existing?.unit||scanData?.unit||'',size:existing?.size||scanData?.size||'',notes:existing?.notes||scanData?.notes||'',stationPar:existing?.stationPar||'',status:existing?.status||'active',vendor:existing?.vendor||''});
   const [photo,setPhoto]=useState(existing?.profilePhoto||capturedPhoto||null);
   const [scanning,setScanning]=useState(false);
   const [scanError,setScanError]=useState(null);
@@ -1312,6 +1312,15 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
         </div>
         <Field label="Station par"><input value={form.stationPar} onChange={set('stationPar')} type="number" min="0" placeholder="0 = no par set"/></Field>
         <Field label="Notes"><input value={form.notes} onChange={set('notes')} placeholder="Route, storage, controlled substance schedule..."/></Field>
+        <Field label="Vendor / supplier">
+          <div style={{display:'flex',gap:8}}>
+            {['mckesson','boundtree'].map(v=>(
+              <button key={v} onClick={()=>setForm(f=>({...f,vendor:f.vendor===v?'':v}))} style={{flex:1,padding:'9px 12px',borderRadius:'var(--radius-md)',border:form.vendor===v?'none':'1px solid var(--color-border)',background:form.vendor===v?'#1a1a1a':'var(--color-bg-secondary)',color:form.vendor===v?'#fff':'var(--color-text-secondary)',fontSize:14,fontWeight:form.vendor===v?600:400,cursor:'pointer',fontFamily:'var(--font)'}}>
+                {v==='mckesson'?'McKesson':'Bound Tree'}
+              </button>
+            ))}
+          </div>
+        </Field>
         <button onClick={handleSave} disabled={!form.name.trim()||saving} style={{...btnP,width:'100%',marginTop:8,opacity:form.name.trim()&&!saving?1:0.45}}>{saving?'Saving...':isEdit?'Save changes':'Save to library'}</button>
       </div>
       {addStockPrompt&&(
