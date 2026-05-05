@@ -1500,10 +1500,13 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
   const activeLib = library.filter(d => d.status !== 'inactive');
   const quick = [1,2,3,4,5,6];
 
- async function handleBarcode(barcode) {
+  async function handleBarcode(barcode) {
+  // DEBUG — show exactly what was scanned
+  console.log('RAW BARCODE:', barcode);
+  alert('DEBUG - Raw barcode: ' + barcode + '\n\nLength: ' + barcode.length);
   setPhase('scanning');
   try {
-    let ndcData = await api.ndcLookup(barcode);
+    const ndcData = await api.ndcLookup(barcode);
 
     // If not found by barcode, try matching against library first
     // then try common drug name lookups
@@ -1547,7 +1550,7 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
   async function handlePhoto(b64) {
     setCapturedPhoto(b64); setPhase('scanning');
     try {
-      const result = await api.quickscan(b64, activeLib);
+      const result = await api.quickscan(b64, acveLib);
       setScanResult(result);
       setMatchedItem(result.matchedId?library.find(d=>d.id===result.matchedId)||null:null);
       setPhase('location');
