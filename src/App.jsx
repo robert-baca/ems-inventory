@@ -989,6 +989,7 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
 function InventoryView({ library, stock, locations, categories, navigate, onSaveCategories, onSaveStock }) {
   const [activeTab, setActiveTab]   = useState('all');
   const [filter, setFilter]         = useState('all');
+  const [parView, setParView]       = useState('both');
   const [search, setSearch]         = useState('');
   const [movingItem, setMovingItem] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
@@ -1003,6 +1004,7 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
     .filter(item => item.status !== 'inactive')
     .filter(item => activeTab === 'all' || item.category === activeTab)
     .filter(item => !q || item.name.toLowerCase().includes(q))
+    .filter(item => parView==='sfot'?(item.sfotPar||0)>0 : parView==='hha'?(item.hhaPar||0)>0 : true)
     .map(item => { const entries=active.filter(s=>s.libraryId===item.id); const worst=worstStatus(entries); return {item,entries,worst}; })
     .filter(({entries}) => entries.length > 0)
     .filter(({worst}) => { if(filter==='issues')return worst==='expired'||worst==='soon'; if(filter==='watch')return worst==='watch'; if(filter==='good')return worst==='good'||worst==='none'; return true; })
@@ -1036,14 +1038,18 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{paddingLeft:30,paddingRight:search?30:10}}/>
           {search&&<button onClick={()=>setSearch('')} style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--color-text-tertiary)',fontSize:18,lineHeight:1,padding:0}}>×</button>}
         </div>
-        <div style={{display:'flex',gap:6,marginBottom:14,overflowX:'auto'}}>
+        <div style={{display:'flex',gap:6,marginBottom:8,overflowX:'auto'}}>
           {[['all','All'],['issues','Issues'],['watch','Watch'],['good','Good']].map(([val,label])=><button key={val} onClick={()=>setFilter(val)} style={{flexShrink:0,padding:'5px 14px',borderRadius:20,fontSize:12,cursor:'pointer',fontWeight:filter===val?600:400,background:filter===val?'var(--color-text)':'transparent',color:filter===val?'var(--color-bg)':'var(--color-text-secondary)',border:filter===val?'none':'1px solid var(--color-border)',fontFamily:'var(--font)'}}>{label}</button>)}
+        </div>
+        <div style={{display:'flex',gap:6,marginBottom:14,overflowX:'auto'}}>
+          <span style={{fontSize:11,color:'var(--color-text-tertiary)',alignSelf:'center',flexShrink:0}}>Par:</span>
+          {[['both','Both'],['sfot','SFOT'],['hha','HHA']].map(([val,label])=><button key={val} onClick={()=>setParView(val)} style={{flexShrink:0,padding:'5px 14px',borderRadius:20,fontSize:12,cursor:'pointer',fontWeight:parView===val?600:400,background:parView===val?'#1d6b3a':'transparent',color:parView===val?'#fff':'var(--color-text-secondary)',border:parView===val?'none':'1px solid var(--color-border)',fontFamily:'var(--font)'}}>{label}</button>)}
         </div>
         {items.length>0&&<div style={{fontSize:12,color:'var(--color-text-tertiary)',marginBottom:10}}>{items.length} item{items.length!==1?'s':''} · {items.reduce((s,{entries})=>s+entries.length,0)} total units</div>}
         {items.length===0&&<EmptyState icon="📋" title="No stock found" subtitle={q?`No results for "${q}"`:active.length===0?'No stock added yet — use Quick Receive or Add Stock':'No stock matches this filter'} action={active.length===0?<button onClick={()=>navigate('addstock',{})} style={{...btnG,padding:'10px 20px'}}>+ Add Stock</button>:null}/>}
         {items.map(({item,entries,worst})=>{
           const ws=SS[worst];const hasIssue=worst==='expired'||worst==='soon';
-          const par=(item.sfotPar||0)+(item.hhaPar||0);const usable=entries.filter(s=>getStatus(s.expiration).type!=='expired').length;const belowPar=par>0&&usable<par;
+          const sfot=item.sfotPar||0;const hha=item.hhaPar||0;const par=parView==='sfot'?sfot:parView==='hha'?hha:sfot+hha;const parLabel=parView==='sfot'?'SFOT':parView==='hha'?'HHA':'par';const usable=entries.filter(s=>getStatus(s.expiration).type!=='expired').length;const belowPar=par>0&&usable<par;
           const cat=categories.find(c=>c.id===item.category);
           const byLocation={};entries.forEach(s=>{const loc=locations.find(l=>l.id===s.locationId);const key=loc?.name||'Unknown';byLocation[key]=(byLocation[key]||0)+1;});
           const locationSummary=Object.entries(byLocation).map(([name,count])=>`${count} @ ${name}`).join(' · ');
@@ -1059,7 +1065,7 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
                   <div style={{fontWeight:600,fontSize:14,marginBottom:2}}>{item.name}</div>
                   <div style={{fontSize:12,color:'var(--color-text-secondary)',display:'flex',gap:8,flexWrap:'wrap',marginBottom:2}}>
                     <span style={{fontWeight:600,color:hasIssue?ws.text:'var(--color-text)'}}>{entries.length} unit{entries.length!==1?'s':''}</span>
-                    {par>0&&<span style={{color:belowPar?'var(--color-danger-text)':'var(--color-text-tertiary)',fontWeight:belowPar?600:400}}>par {par}{belowPar?` ⚠ need ${par-usable}`:' ✓'}</span>}
+                    {par>0&&<span style={{color:belowPar?'var(--color-danger-text)':'var(--color-text-tertiary)',fontWeight:belowPar?600:400}}>{parLabel} {par}{belowPar?` ⚠ need ${par-usable}`:' ✓'}</span>}
                     {earliest&&earliestSt&&earliestSt.type!=='none'&&<span style={{color:earliestSt.type==='expired'?'var(--color-danger-text)':earliestSt.type==='soon'?'var(--color-warning-text)':'var(--color-text-tertiary)'}}>earliest: {earliest.expiration}</span>}
                   </div>
                   {locationSummary&&<div style={{fontSize:11,color:'var(--color-text-tertiary)'}}>📍 {locationSummary}</div>}
