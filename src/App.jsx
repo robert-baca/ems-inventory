@@ -1592,13 +1592,13 @@ function OrderReportView({ library, stock, categories, navigate }) {
   const allItems=report.flatMap(s=>s.items);
   const toOrder=allItems.filter(i=>i.needed>0);
   const belowPar=allItems.filter(i=>i.usable<i.par);
-  function exportCSV(){const rows=[['Category','Item','SFOT Par','HHA Par','Total Par','Total Stock','Expired','Expiring This Month','Usable Stock','Order Qty','Status']];report.forEach(({category,items})=>{items.forEach(({item,total,expired,expiringSoon,usable,par,needed})=>{rows.push([category.name,item.name,item.sfotPar||0,item.hhaPar||0,par,total,expired,expiringSoon,usable,needed,needed>0?'ORDER':'OK']);});});const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`ems-order-report-${new Date().toISOString().slice(0,10)}.csv`;a.click();}
+  function exportCSV(){const rows=[['Category','Item','Vendor','SFOT Par','HHA Par','Total Par','Total Stock','Expired','Expiring This Month','Usable Stock','Order Qty','Status']];report.forEach(({category,items})=>{items.forEach(({item,total,expired,expiringSoon,usable,par,needed})=>{rows.push([category.name,item.name,item.vendor||'',item.sfotPar||0,item.hhaPar||0,par,total,expired,expiringSoon,usable,needed,needed>0?'ORDER':'OK']);});});const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`ems-order-report-${new Date().toISOString().slice(0,10)}.csv`;a.click();}
   const vendorLabel=vendorFilter==='mckesson'?'McKesson':vendorFilter==='boundtree'?'Bound Tree':'All';
   function exportVendorCSV(){
-    const rows=[['Vendor','Item','Category','Total Stock','Expired','Expiring This Month','Usable Stock','SFOT Par','HHA Par','Total Par','Need to Order','Status']];
+    const rows=[['Vendor','Item','Category','SFOT Par','HHA Par','Total Par','Total Stock','Expired','Expiring This Month','Usable Stock','Need to Order','Status']];
     (vendorItems||[]).forEach(({item,total,expired,expiringSoon,usable,par,needed})=>{
       const cat=categories.find(c=>c.id===item.category);
-      rows.push([vendorLabel,item.name,cat?.name||'',total,expired,expiringSoon,usable,item.sfotPar||0,item.hhaPar||0,par,needed,needed>0?'ORDER':expired>0?'EXPIRED':expiringSoon>0?'EXP SOON':'OK']);
+      rows.push([item.vendor||vendorLabel,item.name,cat?.name||'',item.sfotPar||0,item.hhaPar||0,par,total,expired,expiringSoon,usable,needed,needed>0?'ORDER':expired>0?'EXPIRED':expiringSoon>0?'EXP SOON':'OK']);
     });
     const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
     const a=document.createElement('a');
