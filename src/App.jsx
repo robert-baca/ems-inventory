@@ -1791,8 +1791,7 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
   const shown=showComplete?completeItems:pendingItems;
 
   function parseCSV(text){
-    // Strip UTF-8 BOM that Excel adds
-    text=text.replace(/^﻿/,'');
+    text=text.replace(/^﻿/,''); // strip UTF-8 BOM
     function splitLine(line){
       const cols=[];let i=0;
       while(i<=line.length){
@@ -1805,7 +1804,6 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
             else{val+=line[j++];}
           }
           cols.push(val.trim());
-          // skip past comma separator
           while(j<line.length&&line[j]!==',')j++;
           i=j+1;
         }else{
@@ -1817,12 +1815,18 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
       return cols;
     }
     const lines=text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').trim().split('\n');
-    if(lines.length<2)return[];
-    const header=splitLine(lines[0]).map(h=>h.trim());
+    if(lines.length<2)return{rows:[],itemIdx:-1,sfotIdx:-1,hhaIdx:-1,header:[]};
+    // Scan first 10 rows to find the actual header row (the one containing "Item")
+    let headerRowIdx=0;
+    let header=[];
+    for(let r=0;r<Math.min(10,lines.length);r++){
+      const h=splitLine(lines[r]).map(x=>x.trim());
+      if(h.findIndex(x=>/^item$/i.test(x))>=0){headerRowIdx=r;header=h;break;}
+    }
     const itemIdx=header.findIndex(h=>/^item$/i.test(h));
     const sfotIdx=header.findIndex(h=>/sfot/i.test(h));
     const hhaIdx=header.findIndex(h=>/hha/i.test(h));
-    return{rows:lines.slice(1).map(line=>{
+    return{rows:lines.slice(headerRowIdx+1).map(line=>{
       const clean=splitLine(line);
       return{item:clean[itemIdx]||'',sfotPar:sfotIdx>=0?parseInt(clean[sfotIdx])||0:0,hhaPar:hhaIdx>=0?parseInt(clean[hhaIdx])||0:0};
     }).filter(r=>r.item),itemIdx,sfotIdx,hhaIdx,header};
@@ -1887,8 +1891,8 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
             <div style={{marginTop:10,fontSize:12,lineHeight:1.6}}>
               <div style={{color:'var(--color-success-text)',fontWeight:600}}>✓ {uploadInfo.count} items loaded</div>
               <div style={{color:uploadInfo.sfot?'var(--color-text-secondary)':'var(--color-danger-text)'}}>SFOT: {uploadInfo.sfot||'not in file'}</div>
-              <div style={{color:'var(--color-text-secondary)'}}>HHA: {uploadInfo.hha||'not in file — set manually'}</div>
-              {!uploadInfo.sfot&&(
+              <div style={{color:uploadInfo.hha?'var(--color-text-secondary)':'var(--color-warning-text)'}}>HHA: {uploadInfo.hha||'not detected'}</div>
+              {(!uploadInfo.sfot||!uploadInfo.hha)&&(
                 <div style={{marginTop:6,padding:'8px 10px',background:'var(--color-bg)',borderRadius:'var(--radius-sm)',border:'1px solid var(--color-border)'}}>
                   <div style={{fontWeight:600,fontSize:11,color:'var(--color-text-secondary)',marginBottom:4}}>COLUMNS DETECTED IN YOUR CSV:</div>
                   {uploadInfo.allHeaders.map((h,i)=>(
