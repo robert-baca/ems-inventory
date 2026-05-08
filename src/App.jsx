@@ -1886,9 +1886,9 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
           {uploadInfo&&(
             <div style={{marginTop:10,fontSize:12,lineHeight:1.6}}>
               <div style={{color:'var(--color-success-text)',fontWeight:600}}>✓ {uploadInfo.count} items loaded</div>
-              <div style={{color:uploadInfo.sfot?'var(--color-text-secondary)':'var(--color-danger-text)'}}>SFOT: {uploadInfo.sfot||'NOT FOUND'}</div>
-              <div style={{color:uploadInfo.hha?'var(--color-text-secondary)':'var(--color-danger-text)'}}>HHA: {uploadInfo.hha||'NOT FOUND'}</div>
-              {(!uploadInfo.sfot||!uploadInfo.hha)&&(
+              <div style={{color:uploadInfo.sfot?'var(--color-text-secondary)':'var(--color-danger-text)'}}>SFOT: {uploadInfo.sfot||'not in file'}</div>
+              <div style={{color:'var(--color-text-secondary)'}}>HHA: {uploadInfo.hha||'not in file — set manually'}</div>
+              {!uploadInfo.sfot&&(
                 <div style={{marginTop:6,padding:'8px 10px',background:'var(--color-bg)',borderRadius:'var(--radius-sm)',border:'1px solid var(--color-border)'}}>
                   <div style={{fontWeight:600,fontSize:11,color:'var(--color-text-secondary)',marginBottom:4}}>COLUMNS DETECTED IN YOUR CSV:</div>
                   {uploadInfo.allHeaders.map((h,i)=>(
