@@ -1837,6 +1837,19 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
       });
       if(found)lastHeaderRow=r;
     }
+    // Validate: a PAR column must contain at least one numeric value in the first data rows
+    // This rejects false matches like YES/NO columns
+    const sampleLines=lines.slice(lastHeaderRow+1,Math.min(lastHeaderRow+8,lines.length));
+    function colHasNumbers(idx){
+      if(idx<0)return false;
+      return sampleLines.some(line=>{const c=splitLine(line);const v=(c[idx]||'').trim();return/^\d/.test(v);});
+    }
+    if(!colHasNumbers(sfotIdx))sfotIdx=-1;
+    if(!colHasNumbers(hhaIdx)){
+      hhaIdx=-1;
+      // fallback: try the column immediately after SFOT
+      if(sfotIdx>=0&&colHasNumbers(sfotIdx+1))hhaIdx=sfotIdx+1;
+    }
     return{rows:lines.slice(lastHeaderRow+1).map(line=>{
       const clean=splitLine(line);
       return{item:clean[itemIdx]||'',sfotPar:sfotIdx>=0?parseInt(clean[sfotIdx])||0:0,hhaPar:hhaIdx>=0?parseInt(clean[hhaIdx])||0:0};
