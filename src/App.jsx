@@ -1314,7 +1314,10 @@ function LibraryView({ library, stock, categories, navigate, pending }) {
     <div style={{paddingBottom:20}}>
       <div style={{padding:'16px 20px 0',marginBottom:16,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
         <h2 style={{fontSize:20,fontWeight:700}}>Library</h2>
-        <button onClick={()=>navigate('additem')} style={{...btnP,padding:'7px 14px',fontSize:13}}>+ Add</button>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>navigate('vendorlist')} style={{...btnS,padding:'7px 12px',fontSize:13}}>🏭 Vendors</button>
+          <button onClick={()=>navigate('additem')} style={{...btnP,padding:'7px 14px',fontSize:13}}>+ Add</button>
+        </div>
       </div>
       <div style={{padding:'0 20px'}}>
         {pendingCount>0&&(
@@ -1734,21 +1737,26 @@ function QuickUploadView({ navigate, onSavePendingItem, prePhoto }) {
     return()=>{active=false;streamRef.current?.getTracks().forEach(t=>t.stop());};
   },[cameraKey]);
 
-  function capture(){
+  async function capture(){
     if(!videoRef.current||!ready||photos.length>=4)return;
     const c=document.createElement('canvas');c.width=videoRef.current.videoWidth;c.height=videoRef.current.videoHeight;
     c.getContext('2d').drawImage(videoRef.current,0,0);
-    setPhotos(prev=>[...prev,c.toDataURL('image/jpeg',0.88).split(',')[1]]);
+    const raw=c.toDataURL('image/jpeg',0.88).split(',')[1];
+    const resized=await resizeImage(raw,1200);
+    setPhotos(prev=>[...prev,resized]);
   }
 
   async function submit(){
     if(photos.length===0)return;
-    setSubmitting(true);
+    setSubmitting(true);setErr(null);
     const item={id:uid(),photos,notes:notes.trim(),status:'pending',submittedAt:new Date().toISOString()};
-    await onSavePendingItem(item);
-    setPhotos([]);setNotes('');setSubmitting(false);
-    setToast(true);setTimeout(()=>setToast(false),1800);
-    setReady(false);setCameraKey(k=>k+1);
+    try{
+      await onSavePendingItem(item);
+      setPhotos([]);setNotes('');
+      setToast(true);setTimeout(()=>setToast(false),1800);
+      setReady(false);setCameraKey(k=>k+1);
+    }catch(e){setErr('Failed to save — '+(e.message||'check connection and try again'));}
+    setSubmitting(false);
   }
 
   return(
@@ -1795,6 +1803,51 @@ function QuickUploadView({ navigate, onSavePendingItem, prePhoto }) {
             {photos.length===0&&<div style={{fontSize:11,color:'var(--color-text-tertiary)',textAlign:'center',marginTop:8}}>Take at least 1 photo to submit</div>}
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+const VENDORS=['McKesson','Bound Tree'];
+
+function VendorListView({ library, navigate, onSaveLibrary }) {
+  const [search,setSearch]=useState('');
+  const [saving,setSaving]=useState({});
+  const q=search.trim().toLowerCase();
+  const items=library.filter(d=>d.status!=='inactive').filter(d=>!q||d.name.toLowerCase().includes(q)).sort((a,b)=>a.name.localeCompare(b.name));
+
+  async function setVendor(item, vendor) {
+    const next=vendor===item.vendor?'':vendor;
+    setSaving(s=>({...s,[item.id]:true}));
+    await onSaveLibrary(library.map(d=>d.id===item.id?{...d,vendor:next}:d));
+    setSaving(s=>({...s,[item.id]:false}));
+  }
+
+  return(
+    <div style={{paddingBottom:20}}>
+      <TopBar title="Med Company List" onBack={()=>navigate('library')}/>
+      <div style={{padding:'0 20px'}}>
+        <div style={{fontSize:12,color:'var(--color-text-secondary)',marginBottom:14}}>Tap a vendor button to assign or unassign it for each medication.</div>
+        <div style={{position:'relative',marginBottom:14}}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:'var(--color-text-tertiary)',pointerEvents:'none'}}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{paddingLeft:30}}/>
+        </div>
+        {items.map(item=>(
+          <div key={item.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',background:'var(--color-bg)',border:'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',marginBottom:8}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:600,fontSize:13,marginBottom:2}}>{item.name}</div>
+              {item.vendor?<div style={{fontSize:11,color:'var(--color-success-text)',fontWeight:600}}>{item.vendor}</div>:<div style={{fontSize:11,color:'var(--color-text-tertiary)'}}>No vendor assigned</div>}
+            </div>
+            <div style={{display:'flex',gap:6,flexShrink:0}}>
+              {VENDORS.map(v=>(
+                <button key={v} disabled={!!saving[item.id]} onClick={()=>setVendor(item,v)} style={{padding:'6px 10px',borderRadius:'var(--radius-sm)',border:'none',background:item.vendor===v?'#1a1a1a':'var(--color-bg-secondary)',color:item.vendor===v?'#fff':'var(--color-text)',fontWeight:600,fontSize:11,cursor:'pointer',fontFamily:'var(--font)',opacity:saving[item.id]?0.5:1}}>
+                  {v}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+        {items.length===0&&<EmptyState icon="🏭" title="No items" subtitle={q?`No results for "${q}"`:'No active items in library'}/>}
       </div>
     </div>
   );
@@ -2206,7 +2259,7 @@ export default function App() {
 
   const appendStock=async entries=>{try{await api.post('stock',{entries});const updated=await api.getStock();if(Array.isArray(updated))setStock(updated);setSaveStatus('Saved ✓');setTimeout(()=>setSaveStatus(''),2000);}catch{setSaveStatus('Save failed');}};
 
-  const savePendingItem=async item=>{setPending(prev=>{const idx=prev.findIndex(p=>p.id===item.id);if(idx>=0){const n=[...prev];n[idx]=item;return n;}return[item,...prev];});try{await api.savePendingItem(item);}catch{}};
+  const savePendingItem=async item=>{setPending(prev=>{const idx=prev.findIndex(p=>p.id===item.id);if(idx>=0){const n=[...prev];n[idx]=item;return n;}return[item,...prev];});await api.savePendingItem(item);};
   const deletePendingItem=async id=>{setPending(prev=>prev.filter(p=>p.id!==id));try{await api.deletePending(id);}catch{}};
   const saveSpreadsheet=async rows=>{setSpreadsheet(rows);try{await api.saveSpreadsheet(rows);}catch{}};
 
@@ -2237,6 +2290,7 @@ export default function App() {
       {view==='locationdetail' &&<LocationDetailView {...sharedProps} locationId={params.locationId} onSaveStock={saveStock}/>}
       {view==='inventory'      &&<InventoryView {...sharedProps} onSaveCategories={saveCategories} onSaveStock={saveStock}/>}
       {view==='library'        &&<LibraryView {...sharedProps}/>}
+      {view==='vendorlist'     &&<VendorListView {...sharedProps} onSaveLibrary={saveLibrary}/>}
       {view==='drugdetail'     &&<DrugDetailView {...sharedProps} libraryId={params.libraryId} onSaveStock={saveStock} onSaveLibrary={saveLibrary}/>}
       {view==='addstock'       &&<AddStockView {...sharedProps} libraryId={params.libraryId} locationId={params.locationId} onSaveStock={saveStock}/>}
       {view==='additem'        &&<AddItemView {...sharedProps} libraryId={null} scanData={params.scanData} capturedPhoto={params.capturedPhoto} onSaveLibrary={saveLibrary} onSaveStock={saveStock}/>}
