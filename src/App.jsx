@@ -316,16 +316,18 @@ function SmartCamera({ onPhotoCapture, onManual }) {
 }
 
 function LiveScanner({ library, onConfirm, onManual }) {
-  const videoRef    = useRef(null);
-  const streamRef   = useRef(null);
-  const prevDataRef = useRef(null);
-  const stableRef   = useRef(null);
-  const readingRef  = useRef(false);
+  const videoRef      = useRef(null);
+  const streamRef     = useRef(null);
+  const prevDataRef   = useRef(null);
+  const stableRef     = useRef(null);
+  const readingRef    = useRef(false);
+  const captureRef    = useRef(null);
   const [ready,    setReady]   = useState(false);
   const [err,      setErr]     = useState(null);
   const [status,   setStatus]  = useState('aim'); // aim | stable | reading
   const [result,   setResult]  = useState(null);
   const [captured, setCaptured]= useState(null);
+  const [scanError,setScanError]= useState(null);
 
   useEffect(() => {
     let active = true;
@@ -354,12 +356,14 @@ function LiveScanner({ library, onConfirm, onManual }) {
       c.getContext('2d').drawImage(video, 0, 0);
       const b64 = c.toDataURL('image/jpeg', 0.85).split(',')[1];
       try {
+        setScanError(null);
         const data = await api.quickscan(b64, library);
         setCaptured(b64);
         setResult(data);
-      } catch { setStatus('aim'); }
+      } catch (e) { setScanError(e.message || 'Scan failed — try again'); setStatus('aim'); }
       readingRef.current = false;
     }
+    captureRef.current = captureAndScan;
 
     const interval = setInterval(() => {
       if (readingRef.current) return;
@@ -372,7 +376,7 @@ function LiveScanner({ library, onConfirm, onManual }) {
         let diff = 0;
         for (let i = 0; i < pixels.length; i += 4)
           diff += Math.abs(pixels[i]-prevDataRef.current[i]) + Math.abs(pixels[i+1]-prevDataRef.current[i+1]) + Math.abs(pixels[i+2]-prevDataRef.current[i+2]);
-        moving = diff / (160 * 90) > 15;
+        moving = diff / (160 * 90) > 25;
       }
       prevDataRef.current = new Uint8ClampedArray(pixels);
       if (moving) {
@@ -398,6 +402,12 @@ function LiveScanner({ library, onConfirm, onManual }) {
 
   const hint = status === 'reading' ? '🤖 Reading...' : status === 'stable' ? '⏳ Hold steady...' : '🔍 Aim at the label';
 
+  function forceScan() {
+    if (readingRef.current || !ready || result) return;
+    if (stableRef.current) { clearTimeout(stableRef.current); stableRef.current = null; }
+    captureRef.current?.();
+  }
+
   return (
     <div>
       <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: '#000', minHeight: 320 }}>
@@ -421,7 +431,13 @@ function LiveScanner({ library, onConfirm, onManual }) {
           </div>
         )}
       </div>
-      {onManual && !result && <button onClick={onManual} style={{ ...btnS, width: '100%', marginTop: 10, fontSize: 13 }}>✏️ Enter manually</button>}
+      {ready && !result && (
+        <button onClick={forceScan} disabled={status==='reading'} style={{ ...btnS, width: '100%', marginTop: 10, fontSize: 14, background: status==='reading' ? 'var(--color-border)' : 'var(--color-primary)', color: '#fff' }}>
+          {status === 'reading' ? '🤖 Scanning...' : '📷 Tap to Scan'}
+        </button>
+      )}
+      {scanError && <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--color-danger-bg)', color: 'var(--color-danger-text)', borderRadius: 8, fontSize: 13 }}>{scanError}</div>}
+      {onManual && !result && <button onClick={onManual} style={{ ...btnS, width: '100%', marginTop: 8, fontSize: 13 }}>✏️ Enter manually</button>}
     </div>
   );
 }
