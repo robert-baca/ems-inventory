@@ -19,7 +19,22 @@ function parseExp(mmyyyy) {
   if (!mmyyyy || mmyyyy === 'NA') return null;
   const [m, y] = mmyyyy.split('/');
   if (!m || !y || isNaN(+m) || isNaN(+y)) return null;
-  return new Date(+y, +m, 0);
+  let year = +y;
+  if (year < 100) year += 2000;
+  return new Date(year, +m, 0);
+}
+
+function normalizeExp(v) {
+  if (!v || v === 'NA') return v;
+  const parts = v.split('/');
+  if (parts.length !== 2) return v;
+  let [m, y] = parts;
+  if (!m || !y || isNaN(+m) || isNaN(+y)) return v;
+  if (+m < 1 || +m > 12) return v;
+  m = String(+m).padStart(2, '0');
+  if (y.length === 2) y = '20' + y;
+  if (y.length !== 4) return v;
+  return `${m}/${y}`;
 }
 
 function getStatus(expiration) {
@@ -208,11 +223,14 @@ function ExpirationInput({ value, onChange, label }) {
     if (v.length > 7) v = v.slice(0, 7);
     onChange(v);
   }
+  function handleBlur() {
+    if (value && value !== 'NA') { const n = normalizeExp(value); if (n !== value) onChange(n); }
+  }
   return (
     <div>
       {label && <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)', marginBottom: 6 }}>{label}</label>}
       <div style={{ display: 'flex', gap: 8 }}>
-        <input value={value === 'NA' ? 'NA' : value} onChange={handle} placeholder="MM/YYYY" maxLength={7} inputMode="numeric" disabled={value === 'NA'} style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 17, letterSpacing: '0.06em', opacity: value === 'NA' ? 0.5 : 1 }} />
+        <input value={value === 'NA' ? 'NA' : value} onChange={handle} onBlur={handleBlur} placeholder="MM/YYYY" maxLength={7} inputMode="numeric" disabled={value === 'NA'} style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 17, letterSpacing: '0.06em', opacity: value === 'NA' ? 0.5 : 1 }} />
         <button onClick={() => onChange(value === 'NA' ? '' : 'NA')} style={{ padding: '0 14px', borderRadius: 'var(--radius-sm)', border: `1px solid ${value === 'NA' ? '#1a1a1a' : 'var(--color-border)'}`, background: value === 'NA' ? '#1a1a1a' : 'var(--color-bg-secondary)', color: value === 'NA' ? '#fff' : 'var(--color-text-secondary)', cursor: 'pointer', fontWeight: 600, fontSize: 12, fontFamily: 'var(--font)', flexShrink: 0 }}>N/A</button>
       </div>
     </div>
