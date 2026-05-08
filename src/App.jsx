@@ -1790,13 +1790,23 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
   const shown=showComplete?completeItems:pendingItems;
 
   function parseCSV(text){
+    // Strip UTF-8 BOM that Excel adds
+    text=text.replace(/^﻿/,'');
     function splitLine(line){
       const cols=[];let i=0;
       while(i<=line.length){
+        if(i===line.length){cols.push('');break;}
         if(line[i]==='"'){
           let j=i+1,val='';
-          while(j<line.length){if(line[j]==='"'&&line[j+1]==='"'){val+='"';j+=2;}else if(line[j]==='"'){j++;break;}else{val+=line[j++];}}
-          cols.push(val);i=j+1;
+          while(j<line.length){
+            if(line[j]==='"'&&line[j+1]==='"'){val+='"';j+=2;}
+            else if(line[j]==='"'){j++;break;}
+            else{val+=line[j++];}
+          }
+          cols.push(val.trim());
+          // skip past comma separator
+          while(j<line.length&&line[j]!==',')j++;
+          i=j+1;
         }else{
           const end=line.indexOf(',',i);
           if(end<0){cols.push(line.slice(i).trim());break;}
@@ -1811,21 +1821,27 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
     const itemIdx=header.findIndex(h=>/^item$/i.test(h));
     const sfotIdx=header.findIndex(h=>/sfot/i.test(h));
     const hhaIdx=header.findIndex(h=>/hha/i.test(h));
-    if(itemIdx<0)return[];
-    return lines.slice(1).map(line=>{
+    return{rows:lines.slice(1).map(line=>{
       const clean=splitLine(line);
       return{item:clean[itemIdx]||'',sfotPar:sfotIdx>=0?parseInt(clean[sfotIdx])||0:0,hhaPar:hhaIdx>=0?parseInt(clean[hhaIdx])||0:0};
-    }).filter(r=>r.item);
+    }).filter(r=>r.item),itemIdx,sfotIdx,hhaIdx,header};
   }
 
   async function handleFileUpload(e){
     const file=e.target.files?.[0];if(!file)return;
     const text=await file.text();
-    const rows=parseCSV(text);
-    if(!rows.length){alert('Could not parse CSV — make sure there is an "Item" column');return;}
+    const {rows,itemIdx,sfotIdx,hhaIdx,header}=parseCSV(text);
+    if(itemIdx<0){
+      const cols=header.slice(0,8).join(', ');
+      alert(`Could not find "Item" column.\n\nDetected headers: ${cols||'(none)'}\n\nMake sure column A is titled "Item"`);
+      e.target.value='';return;
+    }
+    if(!rows.length){alert('Found the Item column but no data rows');e.target.value='';return;}
     await onSaveSpreadsheet(rows);
-    setRematchStatus(`✓ Uploaded ${rows.length} items`);
-    setTimeout(()=>setRematchStatus(''),3000);
+    const sfotLabel=sfotIdx>=0?`col ${String.fromCharCode(65+sfotIdx)}`:'NOT FOUND';
+    const hhaLabel=hhaIdx>=0?`col ${String.fromCharCode(65+hhaIdx)}`:'NOT FOUND';
+    setRematchStatus(`✓ ${rows.length} items · SFOT: ${sfotLabel} · HHA: ${hhaLabel}`);
+    setTimeout(()=>setRematchStatus(''),6000);
     e.target.value='';
   }
 
@@ -1943,7 +1959,7 @@ function ReviewPendingItemView({ pendingId, pending, library, stock, locations, 
         {item.notes&&<div style={{background:'var(--color-bg-secondary)',border:'1px solid var(--color-border)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:14,fontSize:13,color:'var(--color-text-secondary)'}}>Note: {item.notes}</div>}
         {spreadsheet?.length>0&&(
           <div style={{marginBottom:14,border:'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',overflow:'hidden'}}>
-            <button onClick={()=>setShowSheet(s=>!s)} style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 14px',background:'var(--color-bg-secondary)',border:'none',cursor:'pointer',fontFamily:'var(--font)',fontSize:13,fontWeight:600}}>
+            <button onClick={()=>setShowSheet(s=>!s)} style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 14px',background:'var(--color-bg-secondary)',border:'none',cursor:'pointer',fontFamily:'var(--font)',fontSize:13,fontWeight:600,color:'var(--color-text)'}}>
               <span>📋 PAR reference ({spreadsheet.length} items)</span>
               <span style={{color:'var(--color-text-tertiary)',fontSize:16}}>{showSheet?'▲':'▼'}</span>
             </button>
@@ -1957,10 +1973,10 @@ function ReviewPendingItemView({ pendingId, pending, library, stock, locations, 
                     <span>ITEM</span><span style={{textAlign:'right',paddingRight:12}}>SFOT</span><span style={{textAlign:'right'}}>HHA</span>
                   </div>
                   {spreadsheet.filter(r=>!sheetSearch||r.item.toLowerCase().includes(sheetSearch.toLowerCase())).map((row,i)=>(
-                    <button key={i} onClick={()=>{setForm(f=>({...f,sfotPar:String(row.sfotPar),hhaPar:String(row.hhaPar),name:f.name||row.item}));setSpreadsheetMatch(row.item);setShowSheet(false);}} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:0,width:'100%',padding:'8px 12px',background:'none',border:'none',borderBottom:'1px solid var(--color-border)',cursor:'pointer',fontFamily:'var(--font)',textAlign:'left',fontSize:12}}>
-                      <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',paddingRight:8}}>{row.item}</span>
-                      <span style={{fontWeight:600,color:'#1d6b3a',textAlign:'right',paddingRight:12}}>{row.sfotPar||'—'}</span>
-                      <span style={{fontWeight:600,color:'#1d4ed8',textAlign:'right'}}>{row.hhaPar||'—'}</span>
+                    <button key={i} onClick={()=>{setForm(f=>({...f,sfotPar:String(row.sfotPar),hhaPar:String(row.hhaPar),name:f.name||row.item}));setSpreadsheetMatch(row.item);setShowSheet(false);}} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:0,width:'100%',padding:'8px 12px',background:'none',border:'none',borderBottom:'1px solid var(--color-border)',cursor:'pointer',fontFamily:'var(--font)',textAlign:'left',fontSize:12,color:'var(--color-text)'}}>
+                      <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',paddingRight:8,color:'var(--color-text)'}}>{row.item}</span>
+                      <span style={{fontWeight:700,color:'var(--color-success-text)',textAlign:'right',paddingRight:12}}>{row.sfotPar||'—'}</span>
+                      <span style={{fontWeight:700,color:'var(--color-warning-text)',textAlign:'right'}}>{row.hhaPar||'—'}</span>
                     </button>
                   ))}
                 </div>
