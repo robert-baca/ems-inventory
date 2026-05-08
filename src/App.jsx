@@ -1784,6 +1784,7 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
   const [showComplete,setShowComplete]=useState(false);
   const [rematching,setRematching]=useState(false);
   const [rematchStatus,setRematchStatus]=useState('');
+  const [uploadInfo,setUploadInfo]=useState(null);
   const fileRef=useRef(null);
   const pendingItems=pending.filter(p=>p.status==='pending');
   const completeItems=pending.filter(p=>p.status==='complete');
@@ -1838,10 +1839,9 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
     }
     if(!rows.length){alert('Found the Item column but no data rows');e.target.value='';return;}
     await onSaveSpreadsheet(rows);
-    const sfotLabel=sfotIdx>=0?`col ${String.fromCharCode(65+sfotIdx)}`:'NOT FOUND';
-    const hhaLabel=hhaIdx>=0?`col ${String.fromCharCode(65+hhaIdx)}`:'NOT FOUND';
-    setRematchStatus(`✓ ${rows.length} items · SFOT: ${sfotLabel} · HHA: ${hhaLabel}`);
-    setTimeout(()=>setRematchStatus(''),6000);
+    const colLetter=i=>i>=0?`col ${String.fromCharCode(65+i)} "${header[i]}"`:null;
+    setUploadInfo({count:rows.length,sfot:colLetter(sfotIdx),hha:colLetter(hhaIdx),allHeaders:header});
+    setRematchStatus('');
     e.target.value='';
   }
 
@@ -1872,8 +1872,8 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
           <div style={{fontSize:12,fontWeight:600,color:'var(--color-text-secondary)',marginBottom:10}}>PAR SPREADSHEET</div>
           <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
             <input ref={fileRef} type="file" accept=".csv" onChange={handleFileUpload} style={{display:'none'}}/>
-            <button onClick={()=>fileRef.current?.click()} style={{...btnS,padding:'8px 14px',fontSize:12,flexShrink:0}}>
-              {spreadsheet?.length?`📋 Replace (${spreadsheet.length} items)`:'📋 Upload CSV'}
+            <button onClick={()=>{setUploadInfo(null);fileRef.current?.click();}} style={{...btnS,padding:'8px 14px',fontSize:12,flexShrink:0}}>
+              📋 Upload new CSV
             </button>
             {spreadsheet?.length>0&&(
               <button onClick={rematchAll} disabled={rematching} style={{...btnP,padding:'8px 14px',fontSize:12,flexShrink:0,opacity:rematching?0.6:1}}>
@@ -1881,8 +1881,24 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
               </button>
             )}
           </div>
+          {spreadsheet?.length>0&&!uploadInfo&&<div style={{fontSize:11,color:'var(--color-text-tertiary)',marginTop:8}}>{spreadsheet.length} items loaded</div>}
           {rematchStatus&&<div style={{fontSize:12,color:'var(--color-success-text)',marginTop:8}}>{rematchStatus}</div>}
-          {!spreadsheet?.length&&<div style={{fontSize:11,color:'var(--color-text-tertiary)',marginTop:8}}>CSV needs columns: Item, SFOT Par count, HHA Par count</div>}
+          {uploadInfo&&(
+            <div style={{marginTop:10,fontSize:12,lineHeight:1.6}}>
+              <div style={{color:'var(--color-success-text)',fontWeight:600}}>✓ {uploadInfo.count} items loaded</div>
+              <div style={{color:uploadInfo.sfot?'var(--color-text-secondary)':'var(--color-danger-text)'}}>SFOT: {uploadInfo.sfot||'NOT FOUND'}</div>
+              <div style={{color:uploadInfo.hha?'var(--color-text-secondary)':'var(--color-danger-text)'}}>HHA: {uploadInfo.hha||'NOT FOUND'}</div>
+              {(!uploadInfo.sfot||!uploadInfo.hha)&&(
+                <div style={{marginTop:6,padding:'8px 10px',background:'var(--color-bg)',borderRadius:'var(--radius-sm)',border:'1px solid var(--color-border)'}}>
+                  <div style={{fontWeight:600,fontSize:11,color:'var(--color-text-secondary)',marginBottom:4}}>COLUMNS DETECTED IN YOUR CSV:</div>
+                  {uploadInfo.allHeaders.map((h,i)=>(
+                    <div key={i} style={{fontSize:11,color:'var(--color-text)',fontFamily:'var(--font-mono)'}}>{String.fromCharCode(65+i)}: {h||'(blank)'}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {!spreadsheet?.length&&!uploadInfo&&<div style={{fontSize:11,color:'var(--color-text-tertiary)',marginTop:8}}>CSV needs columns: Item, SFOT Par count, HHA Par count</div>}
         </div>
         <div style={{display:'flex',gap:0,marginBottom:16,borderBottom:'1px solid var(--color-border)'}}>
           {[['pending',`Pending (${pendingItems.length})`],['complete',`Complete (${completeItems.length})`]].map(([id,label])=>(
