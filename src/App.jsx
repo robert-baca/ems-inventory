@@ -1816,20 +1816,26 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
     }
     const lines=text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').trim().split('\n');
     if(lines.length<2)return{rows:[],itemIdx:-1,sfotIdx:-1,hhaIdx:-1,header:[]};
-    // Scan first 10 rows to find the actual header row (the one containing "Item")
-    let headerRowIdx=0;
-    let header=[];
+    // Scan first 10 rows — collect column positions from ALL header rows
+    // (handles multi-row headers where Item, SFOT, and HHA may be in different rows)
+    let itemIdx=-1,sfotIdx=-1,hhaIdx=-1,lastHeaderRow=0;
+    const displayHeader=[];
     for(let r=0;r<Math.min(10,lines.length);r++){
-      const h=splitLine(lines[r]).map(x=>x.trim());
-      if(h.findIndex(x=>/^item$/i.test(x))>=0){headerRowIdx=r;header=h;break;}
+      const cols=splitLine(lines[r]).map(x=>x.trim());
+      let foundAny=false;
+      cols.forEach((h,i)=>{
+        if(h)displayHeader[i]=displayHeader[i]||h;
+        if(/^item$/i.test(h)){itemIdx=i;foundAny=true;}
+        if(/sfot/i.test(h)){sfotIdx=i;foundAny=true;}
+        if(/hha/i.test(h)){hhaIdx=i;foundAny=true;}
+      });
+      if(foundAny)lastHeaderRow=r;
+      if(itemIdx>=0&&sfotIdx>=0&&hhaIdx>=0)break;
     }
-    const itemIdx=header.findIndex(h=>/^item$/i.test(h));
-    const sfotIdx=header.findIndex(h=>/sfot/i.test(h));
-    const hhaIdx=header.findIndex(h=>/hha/i.test(h));
-    return{rows:lines.slice(headerRowIdx+1).map(line=>{
+    return{rows:lines.slice(lastHeaderRow+1).map(line=>{
       const clean=splitLine(line);
       return{item:clean[itemIdx]||'',sfotPar:sfotIdx>=0?parseInt(clean[sfotIdx])||0:0,hhaPar:hhaIdx>=0?parseInt(clean[hhaIdx])||0:0};
-    }).filter(r=>r.item),itemIdx,sfotIdx,hhaIdx,header};
+    }).filter(r=>r.item),itemIdx,sfotIdx,hhaIdx,header:displayHeader};
   }
 
   async function handleFileUpload(e){
