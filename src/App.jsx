@@ -789,7 +789,7 @@ function LocationDetailView({ locationId, locations, library, stock, categories,
   );
 }
 
-function MapView({ locations, library, stock, categories, mapData, navigate, onSaveMap }) {
+function MapView({ locations, library, stock, categories, mapData, navigate, onSaveMap, onSaveLocations }) {
   const [editing, setEditing]           = useState(false);
   const [map, setMap]                   = useState(mapData || { rooms: [], pins: [], lines: [], doors: [], bgImage: null });
   const [dragItem, setDragItem]         = useState(null);
@@ -800,6 +800,10 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
   const [history, setHistory]           = useState([]);
   const [tool, setTool]                 = useState('select');
   const [drawingLine, setDrawingLine]   = useState(null);
+  const [addLocModal, setAddLocModal]   = useState(false);
+  const [newLocName, setNewLocName]     = useState('');
+  const [newLocIcon, setNewLocIcon]     = useState('📦');
+  const LOC_ICONS = ['📦','🎒','🛒','🚑','🏥','💊','🧰','🗄️','🚪','⬜'];
   const canvasRef = useRef(null);
   const fileRef   = useRef(null);
   const active    = stock.filter(s => s.status === 'active');
@@ -873,6 +877,7 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
             <option value="">📍 Add pin...</option>
             {locations.filter(l=>!(map.pins||[]).find(p=>p.locationId===l.id)).map(l=><option key={l.id} value={l.id}>{l.icon} {l.name}</option>)}
           </select>
+          <button onClick={()=>{setNewLocName('');setNewLocIcon('📦');setAddLocModal(true);}} style={{...btnS,padding:'7px 12px',fontSize:12}}>➕ New location</button>
           <button onClick={()=>fileRef.current?.click()} style={{...btnS,padding:'7px 12px',fontSize:12}}>🖼 Floor plan</button>
           <input ref={fileRef} type="file" accept="image/*" onChange={handleBgUpload} style={{display:'none'}}/>
           <div style={{width:1,height:28,background:'var(--color-border)',margin:'0 4px'}}/>
@@ -930,6 +935,31 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
           {selectedStock.length===0&&<div style={{textAlign:'center',padding:'2rem',color:'var(--color-text-secondary)',fontSize:13}}>No stock in this location</div>}
         </div>}
       </div>
+      {addLocModal&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:300,padding:20}}>
+          <div style={{background:'var(--color-bg)',borderRadius:'var(--radius-lg)',padding:'24px',width:'100%',maxWidth:340}}>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:16}}>New Location</div>
+            <div style={{marginBottom:14}}>
+              <label style={{display:'block',fontSize:12,fontWeight:500,color:'var(--color-text-secondary)',marginBottom:5}}>Name</label>
+              <input value={newLocName} onChange={e=>setNewLocName(e.target.value)} placeholder="e.g. ALS Bag 3, Unit 7 Cabinet..." autoFocus onKeyDown={e=>{if(e.key==='Enter'&&newLocName.trim()){const loc={id:uid(),name:newLocName.trim(),icon:newLocIcon,type:'bag',templateId:null};onSaveLocations([...locations,loc]);const pins=map.pins||[];const updated={...map,pins:[...pins,{id:uid(),locationId:loc.id,x:150,y:150}]};updateMap(updated);setAddLocModal(false);}}}/>
+            </div>
+            <div style={{marginBottom:20}}>
+              <label style={{display:'block',fontSize:12,fontWeight:500,color:'var(--color-text-secondary)',marginBottom:8}}>Icon</label>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                {LOC_ICONS.map(icon=>(
+                  <button key={icon} onClick={()=>setNewLocIcon(icon)} style={{width:38,height:38,borderRadius:8,border:newLocIcon===icon?'2px solid #1a1a1a':'1px solid var(--color-border)',background:newLocIcon===icon?'var(--color-bg-secondary)':'transparent',fontSize:20,cursor:'pointer'}}>
+                    {icon}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>setAddLocModal(false)} style={{...btnS,flex:1}}>Cancel</button>
+              <button onClick={()=>{if(!newLocName.trim())return;const loc={id:uid(),name:newLocName.trim(),icon:newLocIcon,type:'bag',templateId:null};onSaveLocations([...locations,loc]);const pins=map.pins||[];const updated={...map,pins:[...pins,{id:uid(),locationId:loc.id,x:150,y:150}]};updateMap(updated);setAddLocModal(false);}} disabled={!newLocName.trim()} style={{...btnP,flex:1,opacity:newLocName.trim()?1:0.45}}>Add to map</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1982,7 +2012,7 @@ export default function App() {
       {saveStatus&&<div style={{position:'fixed',top:16,left:'50%',transform:'translateX(-50%)',background:'var(--color-text)',color:'var(--color-bg)',padding:'6px 18px',borderRadius:20,fontSize:12,fontWeight:500,zIndex:400,whiteSpace:'nowrap',boxShadow:'0 2px 8px rgba(0,0,0,0.2)'}}>{saveStatus}</div>}
       {view==='home'           &&<HomeView {...sharedProps} onSaveStock={saveStock}/>}
       {view==='locations'      &&!isDesktop&&<LocationsView {...sharedProps} onSaveLocations={saveLocations}/>}
-      {view==='map'            &&<MapView {...sharedProps} mapData={mapData} onSaveMap={saveMap}/>}
+      {view==='map'            &&<MapView {...sharedProps} mapData={mapData} onSaveMap={saveMap} onSaveLocations={saveLocations}/>}
       {view==='locationdetail' &&<LocationDetailView {...sharedProps} locationId={params.locationId} onSaveStock={saveStock}/>}
       {view==='inventory'      &&<InventoryView {...sharedProps} onSaveCategories={saveCategories} onSaveStock={saveStock}/>}
       {view==='library'        &&<LibraryView {...sharedProps}/>}
