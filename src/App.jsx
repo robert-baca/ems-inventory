@@ -733,6 +733,7 @@ function LocationsView({ locations, library, stock, categories, navigate }) {
 function LocationDetailView({ locationId, locations, library, stock, categories, navigate, onSaveStock }) {
   const loc = locations.find(l => l.id === locationId);
   const [activeTab, setActiveTab] = useState(null);
+  const [expanded, setExpanded] = useState({});
   const [movingItem, setMovingItem] = useState(null);
   const [editingEntry, setEditingEntry] = useState(null);
   const [moveQty, setMoveQty]     = useState(1);
@@ -765,20 +766,25 @@ function LocationDetailView({ locationId, locations, library, stock, categories,
         {Object.values(grouped).filter(({ item }) => !displayTab || item.category === displayTab).map(({ item, entries }) => {
           const worst = worstStatus(entries); const ws = SS[worst]; const hasIssue = worst === 'expired' || worst === 'soon';
           const cat   = categories.find(c => c.id === item.category);
+          const isOpen = !!expanded[item.id];
           const sorted = [...entries].sort((a, b) => { const da = parseExp(a.expiration), db = parseExp(b.expiration); if (!da && !db) return 0; if (!da) return 1; if (!db) return -1; return da - db; });
           return (
             <div key={item.id} style={{ marginBottom: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', background: 'var(--color-bg)', border: hasIssue ? `1.5px solid ${ws.border}` : '1px solid var(--color-border)', borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0', borderBottom: 'none' }}>
+              <div onClick={() => setExpanded(prev => ({...prev, [item.id]: !prev[item.id]}))} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', background: 'var(--color-bg)', border: hasIssue ? `1.5px solid ${ws.border}` : '1px solid var(--color-border)', borderRadius: isOpen ? 'var(--radius-lg) var(--radius-lg) 0 0' : 'var(--radius-lg)', borderBottom: isOpen ? 'none' : undefined, cursor: 'pointer' }}>
                 <div style={{ width: 36, height: 36, borderRadius: 8, overflow: 'hidden', flexShrink: 0, background: 'var(--color-bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   {item.profilePhoto ? <img src={`data:image/jpeg;base64,${item.profilePhoto}`} alt="" style={{ width: 36, height: 36, objectFit: 'cover' }} /> : <span style={{ fontSize: 18 }}>{cat?.icon || '📦'}</span>}
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div>
-                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{entries.length} unit{entries.length !== 1 ? 's' : ''}</div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <span>{entries.length} unit{entries.length !== 1 ? 's' : ''}</span>
+                    {hasIssue && <Badge type={worst} label={ws.label} />}
+                  </div>
                 </div>
-                <button onClick={() => setMovingItem(item)} style={{ ...btnS, padding: '5px 12px', fontSize: 12 }}>Move</button>
+                <button onClick={e => { e.stopPropagation(); setMovingItem(item); }} style={{ ...btnS, padding: '5px 12px', fontSize: 12 }}>Move</button>
+                <span style={{ color: 'var(--color-text-tertiary)', fontSize: 13, marginLeft: 4 }}>{isOpen ? '▲' : '▼'}</span>
               </div>
-              {sorted.map((entry, i) => {
+              {isOpen && sorted.map((entry, i) => {
                 const st = getStatus(entry.expiration); const es = SS[st.type];
                 return (
                   <div key={entry.id} style={{ display: 'flex', alignItems: 'center', padding: '9px 14px', background: 'var(--color-bg)', border: `1px solid ${es.border}`, borderTop: 'none', borderRadius: i === entries.length - 1 ? '0 0 var(--radius-lg) var(--radius-lg)' : '0' }}>
