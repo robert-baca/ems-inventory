@@ -1816,21 +1816,26 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
     }
     const lines=text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').trim().split('\n');
     if(lines.length<2)return{rows:[],itemIdx:-1,sfotIdx:-1,hhaIdx:-1,header:[]};
-    // Scan first 10 rows — collect column positions from ALL header rows
-    // (handles multi-row headers where Item, SFOT, and HHA may be in different rows)
-    let itemIdx=-1,sfotIdx=-1,hhaIdx=-1,lastHeaderRow=0;
-    const displayHeader=[];
+    // Step 1: find the row containing "Item" column (up to row 10)
+    let itemRowIdx=-1,itemIdx=-1;
     for(let r=0;r<Math.min(10,lines.length);r++){
       const cols=splitLine(lines[r]).map(x=>x.trim());
-      let foundAny=false;
+      const idx=cols.findIndex(h=>/^item$/i.test(h));
+      if(idx>=0){itemRowIdx=r;itemIdx=idx;break;}
+    }
+    if(itemRowIdx<0)return{rows:[],itemIdx:-1,sfotIdx:-1,hhaIdx:-1,header:[]};
+    // Step 2: scan only the Item row + next 3 rows for SFOT and HHA sub-headers
+    let sfotIdx=-1,hhaIdx=-1,lastHeaderRow=itemRowIdx;
+    const displayHeader=[];
+    for(let r=itemRowIdx;r<Math.min(itemRowIdx+4,lines.length);r++){
+      const cols=splitLine(lines[r]).map(x=>x.trim());
+      let found=false;
       cols.forEach((h,i)=>{
         if(h)displayHeader[i]=displayHeader[i]||h;
-        if(/^item$/i.test(h)){itemIdx=i;foundAny=true;}
-        if(/sfot/i.test(h)){sfotIdx=i;foundAny=true;}
-        if(/hha/i.test(h)){hhaIdx=i;foundAny=true;}
+        if(/sfot/i.test(h)){sfotIdx=i;found=true;}
+        if(/hha/i.test(h)){hhaIdx=i;found=true;}
       });
-      if(foundAny)lastHeaderRow=r;
-      if(itemIdx>=0&&sfotIdx>=0&&hhaIdx>=0)break;
+      if(found)lastHeaderRow=r;
     }
     return{rows:lines.slice(lastHeaderRow+1).map(line=>{
       const clean=splitLine(line);
