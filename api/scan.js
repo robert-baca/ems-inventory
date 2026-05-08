@@ -53,7 +53,9 @@ Respond with only valid JSON, no markdown.`
     const data = await response.json();
     if (data.error) throw new Error(data.error.message);
     const text = (data.content || []).map(c => c.text || '').join('');
-    res.status(200).json(JSON.parse(text.replace(/```json|```/g, '').trim()));
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('No JSON in response');
+    res.status(200).json(JSON.parse(match[0]));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
