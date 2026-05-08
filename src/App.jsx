@@ -1686,7 +1686,7 @@ function QuickUploadView({ navigate, onSavePendingItem, prePhoto }) {
   const [photos,setPhotos]=useState(prePhoto?[prePhoto]:[]);
   const [notes,setNotes]=useState('');
   const [submitting,setSubmitting]=useState(false);
-  const [done,setDone]=useState(false);
+  const [toast,setToast]=useState(false);
   const [cameraKey,setCameraKey]=useState(0);
   const videoRef=useRef(null);
   const streamRef=useRef(null);
@@ -1694,13 +1694,12 @@ function QuickUploadView({ navigate, onSavePendingItem, prePhoto }) {
   const [err,setErr]=useState(null);
 
   useEffect(()=>{
-    if(done)return;
     let active=true;
     navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}})
       .then(stream=>{if(!active){stream.getTracks().forEach(t=>t.stop());return;}streamRef.current=stream;if(videoRef.current){videoRef.current.srcObject=stream;videoRef.current.play().then(()=>setReady(true)).catch(()=>{});}})
       .catch(()=>setErr('Camera unavailable — check permissions'));
     return()=>{active=false;streamRef.current?.getTracks().forEach(t=>t.stop());};
-  },[done,cameraKey]);
+  },[cameraKey]);
 
   function capture(){
     if(!videoRef.current||!ready||photos.length>=4)return;
@@ -1712,32 +1711,17 @@ function QuickUploadView({ navigate, onSavePendingItem, prePhoto }) {
   async function submit(){
     if(photos.length===0)return;
     setSubmitting(true);
-    streamRef.current?.getTracks().forEach(t=>t.stop());
     const item={id:uid(),photos,notes:notes.trim(),status:'pending',submittedAt:new Date().toISOString()};
     await onSavePendingItem(item);
-    setSubmitting(false);
-    setDone(true);
+    setPhotos([]);setNotes('');setSubmitting(false);
+    setToast(true);setTimeout(()=>setToast(false),1800);
+    setReady(false);setCameraKey(k=>k+1);
   }
-
-  function uploadAnother(){setPhotos([]);setNotes('');setDone(false);setReady(false);setErr(null);setCameraKey(k=>k+1);}
-
-  if(done)return(
-    <div style={{paddingBottom:20}}>
-      <TopBar title="Quick Upload" onBack={()=>navigate(-1)}/>
-      <div style={{padding:'0 20px',textAlign:'center',paddingTop:40}}>
-        <div style={{fontSize:52,marginBottom:12}}>✓</div>
-        <div style={{fontSize:17,fontWeight:700,marginBottom:8}}>Submitted!</div>
-        <div style={{fontSize:13,color:'var(--color-text-secondary)',marginBottom:32}}>Added to the review queue. Someone on a PC will fill in the details.</div>
-        <button onClick={()=>navigate('pendingqueue')} style={{...btnS,width:'100%',marginBottom:10}}>View review queue</button>
-        <button onClick={uploadAnother} style={{...btnG,width:'100%',marginBottom:10}}>Upload another item</button>
-        <button onClick={()=>navigate(-1)} style={{...btnS,width:'100%'}}>Done</button>
-      </div>
-    </div>
-  );
 
   return(
     <div style={{paddingBottom:20}}>
-      <TopBar title="Quick Upload" onBack={()=>navigate(-1)} subtitle="Snap photos — someone else fills in the details"/>
+      <TopBar title="Quick Upload" onBack={()=>navigate(-1)}/>
+      {toast&&<div style={{margin:'0 20px 8px',background:'var(--color-success-bg)',color:'var(--color-success-text)',border:'1px solid var(--color-success-border)',borderRadius:'var(--radius-md)',padding:'10px 14px',fontSize:13,fontWeight:600,textAlign:'center'}}>✓ Submitted — ready for next</div>}
       <div style={{padding:'0 20px'}}>
         {err?(
           <div style={{textAlign:'center',padding:'2rem',color:'var(--color-text-secondary)',fontSize:13}}>{err}</div>
