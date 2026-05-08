@@ -848,6 +848,7 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
   const [tool, setTool]                 = useState('select');
   const [drawingLine, setDrawingLine]   = useState(null);
   const [addLocModal, setAddLocModal]   = useState(false);
+  const [mapExpanded, setMapExpanded]   = useState({});
   const [newLocName, setNewLocName]     = useState('');
   const [newLocIcon, setNewLocIcon]     = useState('📦');
   const LOC_ICONS = ['📦','🎒','🛒','🚑','🏥','💊','🧰','🗄️','🚪','⬜'];
@@ -974,10 +975,15 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
             <div><div style={{fontSize:17,fontWeight:700}}>{selectedLocObj.icon} {selectedLocObj.name}</div><div style={{fontSize:12,color:'var(--color-text-secondary)',marginTop:2}}>{selectedStock.length} units</div></div>
             <button onClick={()=>setSelectedPin(null)} style={{background:'none',border:'none',cursor:'pointer',fontSize:22,color:'var(--color-text-tertiary)'}}>×</button>
           </div>
-          {Object.values(selectedGrouped).map(({item,entries})=>{const worst=worstStatus(entries);const ws=SS[worst];const hasIssue=worst==='expired'||worst==='soon';return<div key={item.id} onClick={()=>navigate('drugdetail',{libraryId:item.id})} style={{marginBottom:10,padding:'10px 12px',background:'var(--color-bg-secondary)',border:hasIssue?`1.5px solid ${ws.border}`:'1px solid var(--color-border)',borderRadius:'var(--radius-md)',cursor:'pointer'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}><div style={{fontWeight:600,fontSize:13}}>{item.name}</div><Badge type={worst} label={`${entries.length} units`}/></div>
-            {[...entries].sort((a,b)=>{const da=parseExp(a.expiration),db=parseExp(b.expiration);if(!da&&!db)return 0;if(!da)return 1;if(!db)return -1;return da-db;}).slice(0,3).map(e=>{const st=getStatus(e.expiration);return<div key={e.id} style={{fontSize:12,display:'flex',justifyContent:'space-between',padding:'3px 0',borderTop:'1px solid var(--color-border)'}}><span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{e.expiration==='NA'?'N/A':e.expiration||'—'}</span><Badge type={st.type} label={st.label}/></div>;})}
-            {entries.length>3&&<div style={{fontSize:11,color:'var(--color-text-tertiary)',marginTop:4}}>+{entries.length-3} more</div>}
+          {Object.values(selectedGrouped).map(({item,entries})=>{const worst=worstStatus(entries);const ws=SS[worst];const hasIssue=worst==='expired'||worst==='soon';const isOpen=!!mapExpanded[item.id];const sorted=[...entries].sort((a,b)=>{const da=parseExp(a.expiration),db=parseExp(b.expiration);if(!da&&!db)return 0;if(!da)return 1;if(!db)return -1;return da-db;});return<div key={item.id} style={{marginBottom:8}}>
+            <div onClick={()=>setMapExpanded(p=>({...p,[item.id]:!p[item.id]}))} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'9px 12px',background:'var(--color-bg-secondary)',border:hasIssue?`1.5px solid ${ws.border}`:'1px solid var(--color-border)',borderRadius:isOpen?'var(--radius-md) var(--radius-md) 0 0':'var(--radius-md)',cursor:'pointer',borderBottom:isOpen?'none':undefined}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:600,fontSize:13}}>{item.name}</div>
+                <div style={{fontSize:11,color:'var(--color-text-secondary)',display:'flex',gap:6,alignItems:'center',marginTop:1}}><span>{entries.length} unit{entries.length!==1?'s':''}</span>{hasIssue&&<Badge type={worst} label={ws.label}/>}</div>
+              </div>
+              <span style={{color:'var(--color-text-tertiary)',fontSize:11,marginLeft:8}}>{isOpen?'▲':'▼'}</span>
+            </div>
+            {isOpen&&sorted.map((e,i)=>{const st=getStatus(e.expiration);return<div key={e.id} style={{fontSize:12,display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 12px',background:'var(--color-bg)',border:`1px solid ${SS[st.type].border}`,borderTop:'none',borderRadius:i===sorted.length-1?'0 0 var(--radius-md) var(--radius-md)':'0'}}><span style={{fontFamily:'var(--font-mono)',fontWeight:600}}>{e.expiration==='NA'?'N/A':e.expiration||'—'}</span><Badge type={st.type} label={st.label}/></div>;})}
           </div>;})}
           {selectedStock.length===0&&<div style={{textAlign:'center',padding:'2rem',color:'var(--color-text-secondary)',fontSize:13}}>No stock in this location</div>}
         </div>}
