@@ -352,12 +352,15 @@ function LiveScanner({ library, onConfirm, onManual }) {
       const video = videoRef.current;
       if (!video) { readingRef.current = false; return; }
       const c = document.createElement('canvas');
-      c.width = video.videoWidth; c.height = video.videoHeight;
-      c.getContext('2d').drawImage(video, 0, 0);
-      const b64 = c.toDataURL('image/jpeg', 0.85).split(',')[1];
+      const maxW = 800;
+      const scale = Math.min(1, maxW / video.videoWidth);
+      c.width = Math.round(video.videoWidth * scale);
+      c.height = Math.round(video.videoHeight * scale);
+      c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+      const b64 = c.toDataURL('image/jpeg', 0.8).split(',')[1];
       try {
         setScanError(null);
-        const data = await api.quickscan(b64, library);
+        const data = await api.quickscan(b64, library.map(({id, name}) => ({id, name})));
         setCaptured(b64);
         setResult(data);
       } catch (e) { setScanError(e.message || 'Scan failed — try again'); setStatus('aim'); }
