@@ -144,7 +144,10 @@ const api = {
   saveMap:       data   => api.post('map', data),
   scan:      images     => fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ images }) }).then(r => r.json()).then(d => { if (d.error) throw new Error(d.error); return d; }),
   quickscan: (image, library) => fetch('/api/quickscan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image, library }) }).then(r => r.json()).then(d => { if (d.error) throw new Error(d.error); return d; }),
-  ndcLookup: ndc => fetch(`/api/ndc?ndc=${encodeURIComponent(ndc)}`).then(r => r.json()),
+  ndcLookup:        ndc  => fetch(`/api/ndc?ndc=${encodeURIComponent(ndc)}`).then(r => r.json()),
+  getPending:       ()   => api.get('pending'),
+  savePendingItem:  item => api.post('pending', { item }),
+  deletePending:    id   => api.post('pending', { deleteId: id }),
 };
 
 function Badge({ type, label }) {
@@ -1437,7 +1440,7 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
           </div>
         )}
         {!matchedItem?(
-          <><button onClick={()=>navigate('additem',{scanData:{name:scanResult?.matchedName||'',notes:[scanResult?.route,scanResult?.dosageForm].filter(Boolean).join(', '),barcode:scanResult?.barcode||''},capturedPhoto})} style={{...btnP,width:'100%',marginBottom:10}}>Add to library</button><button onClick={reset} style={{...btnS,width:'100%'}}>Skip — scan next</button></>
+          <><button onClick={()=>navigate('additem',{scanData:{name:scanResult?.matchedName||'',notes:[scanResult?.route,scanResult?.dosageForm].filter(Boolean).join(', '),barcode:scanResult?.barcode||''},capturedPhoto})} style={{...btnP,width:'100%',marginBottom:10}}>Add to library</button><button onClick={()=>navigate('quickupload',{prePhoto:capturedPhoto||undefined})} style={{...btnS,width:'100%',marginBottom:10}}>📤 Quick Upload — review later</button><button onClick={reset} style={{...btnS,width:'100%'}}>Skip — scan next</button></>
         ):(
           <><div style={{fontSize:13,fontWeight:600,marginBottom:10}}>Where is this going?</div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:16,maxHeight:280,overflowY:'auto'}}>
@@ -1621,11 +1624,253 @@ function TemplateEditorView({ templateId, templates, library, categories, naviga
   );
 }
 
-function BottomNav({ view, navigate, isDesktop }) {
+function QuickUploadView({ navigate, onSavePendingItem, prePhoto }) {
+  const [photos,setPhotos]=useState(prePhoto?[prePhoto]:[]);
+  const [notes,setNotes]=useState('');
+  const [submitting,setSubmitting]=useState(false);
+  const [done,setDone]=useState(false);
+  const [cameraKey,setCameraKey]=useState(0);
+  const videoRef=useRef(null);
+  const streamRef=useRef(null);
+  const [ready,setReady]=useState(false);
+  const [err,setErr]=useState(null);
+
+  useEffect(()=>{
+    if(done)return;
+    let active=true;
+    navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}})
+      .then(stream=>{if(!active){stream.getTracks().forEach(t=>t.stop());return;}streamRef.current=stream;if(videoRef.current){videoRef.current.srcObject=stream;videoRef.current.play().then(()=>setReady(true)).catch(()=>{});}})
+      .catch(()=>setErr('Camera unavailable — check permissions'));
+    return()=>{active=false;streamRef.current?.getTracks().forEach(t=>t.stop());};
+  },[done,cameraKey]);
+
+  function capture(){
+    if(!videoRef.current||!ready||photos.length>=4)return;
+    const c=document.createElement('canvas');c.width=videoRef.current.videoWidth;c.height=videoRef.current.videoHeight;
+    c.getContext('2d').drawImage(videoRef.current,0,0);
+    setPhotos(prev=>[...prev,c.toDataURL('image/jpeg',0.88).split(',')[1]]);
+  }
+
+  async function submit(){
+    if(photos.length===0)return;
+    setSubmitting(true);
+    streamRef.current?.getTracks().forEach(t=>t.stop());
+    const item={id:uid(),photos,notes:notes.trim(),status:'pending',submittedAt:new Date().toISOString()};
+    await onSavePendingItem(item);
+    setSubmitting(false);
+    setDone(true);
+  }
+
+  function uploadAnother(){setPhotos([]);setNotes('');setDone(false);setReady(false);setErr(null);setCameraKey(k=>k+1);}
+
+  if(done)return(
+    <div style={{paddingBottom:20}}>
+      <TopBar title="Quick Upload" onBack={()=>navigate(-1)}/>
+      <div style={{padding:'0 20px',textAlign:'center',paddingTop:40}}>
+        <div style={{fontSize:52,marginBottom:12}}>✓</div>
+        <div style={{fontSize:17,fontWeight:700,marginBottom:8}}>Submitted!</div>
+        <div style={{fontSize:13,color:'var(--color-text-secondary)',marginBottom:32}}>Added to the review queue. Someone on a PC will fill in the details.</div>
+        <button onClick={()=>navigate('pendingqueue')} style={{...btnS,width:'100%',marginBottom:10}}>View review queue</button>
+        <button onClick={uploadAnother} style={{...btnG,width:'100%',marginBottom:10}}>Upload another item</button>
+        <button onClick={()=>navigate(-1)} style={{...btnS,width:'100%'}}>Done</button>
+      </div>
+    </div>
+  );
+
+  return(
+    <div style={{paddingBottom:20}}>
+      <TopBar title="Quick Upload" onBack={()=>navigate(-1)} subtitle="Snap photos — someone else fills in the details"/>
+      <div style={{padding:'0 20px'}}>
+        {err?(
+          <div style={{textAlign:'center',padding:'2rem',color:'var(--color-text-secondary)',fontSize:13}}>{err}</div>
+        ):(
+          <>
+            <div style={{position:'relative',borderRadius:'var(--radius-lg)',overflow:'hidden',marginBottom:12,background:'#000',minHeight:240}}>
+              <video ref={videoRef} style={{width:'100%',display:'block',maxHeight:320,objectFit:'cover'}} playsInline muted/>
+              {ready&&<>
+                <div style={{position:'absolute',inset:'15%',border:'2px solid rgba(255,255,255,0.8)',borderRadius:10,pointerEvents:'none',boxShadow:'0 0 0 9999px rgba(0,0,0,0.45)'}}/>
+                <div style={{position:'absolute',bottom:10,left:'50%',transform:'translateX(-50%)',fontSize:11,color:'#fff',background:'rgba(0,0,0,0.6)',padding:'4px 14px',borderRadius:20,whiteSpace:'nowrap'}}>
+                  {photos.length===0?'Aim at drug name / label':photos.length===1?'Aim at expiration date':'Any other detail (optional)'}
+                </div>
+              </>}
+              {!ready&&<div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center'}}><span style={{color:'rgba(255,255,255,0.5)',fontSize:13}}>Starting camera...</span></div>}
+            </div>
+            <button onClick={capture} disabled={!ready||photos.length>=4} style={{...btnG,width:'100%',marginBottom:10,opacity:ready&&photos.length<4?1:0.5}}>
+              📷 Capture photo {photos.length+1}{photos.length===0?' — drug name':photos.length===1?' — expiration date':''}
+            </button>
+            {photos.length>0&&(
+              <div style={{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap'}}>
+                {photos.map((p,i)=>(
+                  <div key={i} style={{position:'relative',width:72,height:72,borderRadius:8,overflow:'hidden',flexShrink:0}}>
+                    <img src={`data:image/jpeg;base64,${p}`} alt="" style={{width:72,height:72,objectFit:'cover'}}/>
+                    <button onClick={()=>setPhotos(prev=>prev.filter((_,idx)=>idx!==i))} style={{position:'absolute',top:2,right:2,background:'#dc2626',border:'none',color:'#fff',borderRadius:'50%',width:18,height:18,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:11}}>×</button>
+                    <div style={{position:'absolute',bottom:0,left:0,right:0,background:'rgba(0,0,0,0.6)',color:'#fff',fontSize:9,textAlign:'center',padding:'2px'}}>{i===0?'Name':i===1?'Exp':'Detail'}</div>
+                  </div>
+                ))}
+                {photos.length<4&&<div style={{width:72,height:72,borderRadius:8,border:'2px dashed var(--color-border)',display:'flex',alignItems:'center',justifyContent:'center',color:'var(--color-text-tertiary)',fontSize:22}}>+</div>}
+              </div>
+            )}
+            <div style={{marginBottom:14}}>
+              <label style={{display:'block',fontSize:12,fontWeight:500,color:'var(--color-text-secondary)',marginBottom:5}}>Notes (optional)</label>
+              <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="e.g. from narcotics bag, McKesson box..."/>
+            </div>
+            <button onClick={submit} disabled={photos.length===0||submitting} style={{...btnP,width:'100%',opacity:photos.length>0&&!submitting?1:0.45}}>
+              {submitting?'Submitting...':`Submit ${photos.length} photo${photos.length!==1?'s':''} for review`}
+            </button>
+            {photos.length===0&&<div style={{fontSize:11,color:'var(--color-text-tertiary)',textAlign:'center',marginTop:8}}>Take at least 1 photo to submit</div>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PendingQueueView({ pending, navigate }) {
+  const [showComplete,setShowComplete]=useState(false);
+  const pendingItems=pending.filter(p=>p.status==='pending');
+  const completeItems=pending.filter(p=>p.status==='complete');
+  const shown=showComplete?completeItems:pendingItems;
+
+  return(
+    <div style={{paddingBottom:40}}>
+      <TopBar title="Upload Queue" onBack={()=>navigate(-1)} subtitle={`${pendingItems.length} waiting for review`}/>
+      <div style={{padding:'0 20px'}}>
+        <div style={{display:'flex',gap:0,marginBottom:16,borderBottom:'1px solid var(--color-border)'}}>
+          {[['pending',`Pending (${pendingItems.length})`],['complete',`Complete (${completeItems.length})`]].map(([id,label])=>(
+            <button key={id} onClick={()=>setShowComplete(id==='complete')} style={{flex:1,padding:'10px',border:'none',borderBottom:(showComplete?id==='complete':id==='pending')?'2px solid var(--color-text)':'2px solid transparent',background:'transparent',color:(showComplete?id==='complete':id==='pending')?'var(--color-text)':'var(--color-text-secondary)',fontWeight:(showComplete?id==='complete':id==='pending')?600:400,fontSize:13,cursor:'pointer',fontFamily:'var(--font)',marginBottom:-1}}>{label}</button>
+          ))}
+        </div>
+        {shown.length===0?(
+          <EmptyState icon={showComplete?'✅':'📭'} title={showComplete?'No completed items yet':'Queue is empty'} subtitle={showComplete?'Items added to library appear here':'Mobile photo uploads will appear here for review'}/>
+        ):(
+          shown.map(item=>(
+            <div key={item.id} onClick={()=>!showComplete&&navigate('reviewpending',{pendingId:item.id})} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:'var(--color-bg)',border:'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',marginBottom:8,cursor:showComplete?'default':'pointer'}}>
+              {item.photos?.[0]&&<img src={`data:image/jpeg;base64,${item.photos[0]}`} alt="" style={{width:56,height:56,objectFit:'cover',borderRadius:8,flexShrink:0}}/>}
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,marginBottom:2}}>{item.photos?.length||0} photo{item.photos?.length!==1?'s':''}</div>
+                {item.notes&&<div style={{fontSize:12,color:'var(--color-text-secondary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.notes}</div>}
+                <div style={{fontSize:11,color:'var(--color-text-tertiary)',marginTop:2}}>{new Date(item.submittedAt).toLocaleString()}</div>
+              </div>
+              {!showComplete&&<span style={{color:'var(--color-text-tertiary)',fontSize:18}}>›</span>}
+              {showComplete&&<span style={{fontSize:11,color:'var(--color-success-text)',fontWeight:600}}>✓ Done</span>}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReviewPendingItemView({ pendingId, pending, library, stock, locations, categories, navigate, onSaveLibrary, onSaveStock, onSavePendingItem }) {
+  const item=pending.find(p=>p.id===pendingId);
+  const [form,setForm]=useState({name:'',category:categories[0]?.id||'',packagingType:'vial',unit:'',size:'',notes:'',stationPar:'',status:'active',vendor:''});
+  const [filling,setFilling]=useState(false);
+  const [filled,setFilled]=useState(false);
+  const [fillError,setFillError]=useState(null);
+  const [saving,setSaving]=useState(false);
+  const [addStockPrompt,setAddStockPrompt]=useState(null);
+  const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
+
+  if(!item)return null;
+
+  async function aiFill(){
+    setFilling(true);setFillError(null);
+    try{
+      const result=await api.scan(item.photos);
+      setForm(f=>({...f,name:result.name||f.name,category:categories.find(c=>c.id===result.category)?.id||result.category||f.category,packagingType:result.packagingType||f.packagingType,unit:result.unit||f.unit,size:result.size||f.size,notes:result.notes||f.notes}));
+      setFilled(true);
+    }catch{setFillError('Could not read label — fill in manually below');}
+    setFilling(false);
+  }
+
+  async function handleSave(){
+    setSaving(true);
+    const newId=uid();
+    const newItem={id:newId,...form,profilePhoto:item.photos?.[0]||null,stationPar:parseInt(form.stationPar)||0,addedAt:new Date().toISOString()};
+    await onSaveLibrary([newItem,...library]);
+    await onSavePendingItem({...item,status:'complete'});
+    setSaving(false);
+    setAddStockPrompt(newId);
+  }
+
+  return(
+    <div style={{paddingBottom:20}}>
+      <TopBar title="Review Upload" onBack={()=>navigate('pendingqueue')} subtitle={new Date(item.submittedAt).toLocaleString()}/>
+      <div style={{padding:'0 20px'}}>
+        <div style={{display:'flex',gap:8,marginBottom:14,overflowX:'auto',paddingBottom:4}}>
+          {item.photos?.map((p,i)=>(
+            <img key={i} src={`data:image/jpeg;base64,${p}`} alt="" style={{width:130,height:130,objectFit:'cover',borderRadius:10,flexShrink:0}}/>
+          ))}
+        </div>
+        {item.notes&&<div style={{background:'var(--color-bg-secondary)',border:'1px solid var(--color-border)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:14,fontSize:13,color:'var(--color-text-secondary)'}}>Note: {item.notes}</div>}
+        {!filled?(
+          <button onClick={aiFill} disabled={filling} style={{...btnP,width:'100%',marginBottom:16,opacity:filling?0.7:1}}>
+            {filling?'Reading label photos...':'🤖 AI Fill — read label photos'}
+          </button>
+        ):(
+          <div style={{background:'var(--color-success-bg)',color:'var(--color-success-text)',border:'1px solid var(--color-success-border)',padding:'10px 14px',borderRadius:'var(--radius-md)',marginBottom:16,fontSize:13,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span>✓ AI filled — review and adjust below</span>
+            <button onClick={aiFill} style={{background:'none',border:'none',cursor:'pointer',color:'var(--color-success-text)',fontSize:12,fontFamily:'var(--font)',textDecoration:'underline'}}>Refill</button>
+          </div>
+        )}
+        {fillError&&<div style={{fontSize:12,color:'var(--color-danger-text)',marginBottom:12}}>{fillError}</div>}
+        <Field label="Item name *"><input value={form.name} onChange={set('name')} placeholder="e.g. Aspirin 325mg, NPA 28fr, Tourniquet"/></Field>
+        <Field label="Category">
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {categories.map(cat=><button key={cat.id} onClick={()=>setForm(f=>({...f,category:cat.id}))} style={{padding:'6px 12px',borderRadius:20,border:form.category===cat.id?'none':'1px solid var(--color-border)',background:form.category===cat.id?'#1a1a1a':'var(--color-bg-secondary)',color:form.category===cat.id?'#fff':'var(--color-text-secondary)',fontSize:13,cursor:'pointer',fontWeight:form.category===cat.id?600:400,fontFamily:'var(--font)'}}>{cat.icon} {cat.name}</button>)}
+          </div>
+        </Field>
+        <PackagingSelector value={form.packagingType} onChange={v=>setForm(f=>({...f,packagingType:v}))}/>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          <Field label="Unit"><input value={form.unit} onChange={set('unit')} placeholder="mL, mg, tablet..."/></Field>
+          <Field label="Size / gauge"><input value={form.size} onChange={set('size')} placeholder="28fr, Large, 18ga..."/></Field>
+        </div>
+        <Field label="Station par"><input value={form.stationPar} onChange={set('stationPar')} type="number" min="0" placeholder="0 = no par set"/></Field>
+        <Field label="Notes"><input value={form.notes} onChange={set('notes')} placeholder="Route, storage, controlled substance schedule..."/></Field>
+        <Field label="Vendor / supplier">
+          <div style={{display:'flex',gap:8}}>
+            {['mckesson','boundtree'].map(v=>(
+              <button key={v} onClick={()=>setForm(f=>({...f,vendor:f.vendor===v?'':v}))} style={{flex:1,padding:'9px 12px',borderRadius:'var(--radius-md)',border:form.vendor===v?'none':'1px solid var(--color-border)',background:form.vendor===v?'#1a1a1a':'var(--color-bg-secondary)',color:form.vendor===v?'#fff':'var(--color-text-secondary)',fontSize:14,fontWeight:form.vendor===v?600:400,cursor:'pointer',fontFamily:'var(--font)'}}>
+                {v==='mckesson'?'McKesson':'Bound Tree'}
+              </button>
+            ))}
+          </div>
+        </Field>
+        <button onClick={handleSave} disabled={!form.name.trim()||saving} style={{...btnG,width:'100%',marginTop:8,opacity:form.name.trim()&&!saving?1:0.45}}>
+          {saving?'Saving...':'✓ Save to library'}
+        </button>
+      </div>
+      {addStockPrompt&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:200,padding:'20px'}}>
+          <div style={{background:'var(--color-bg)',borderRadius:'var(--radius-lg)',padding:'28px 24px',width:'100%',maxWidth:360,textAlign:'center'}}>
+            <div style={{fontSize:36,marginBottom:10}}>✓</div>
+            <div style={{fontSize:17,fontWeight:700,marginBottom:8}}>Added to library!</div>
+            <div style={{fontSize:14,color:'var(--color-text-secondary)',marginBottom:24}}>Do you want to add stock for this item now?</div>
+            <button onClick={()=>navigate('addstock',{libraryId:addStockPrompt})} style={{...btnP,width:'100%',marginBottom:10}}>Yes, add stock</button>
+            <button onClick={()=>navigate('pendingqueue')} style={{...btnS,width:'100%'}}>No, back to queue</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BottomNav({ view, navigate, isDesktop, pendingCount }) {
   const tabs=[{id:'home',icon:'🏠',label:'Home'},{id:isDesktop?'map':'locations',icon:'📍',label:'Locations'},{id:'inventory',icon:'📋',label:'Inventory'},{id:'library',icon:'📦',label:'Library'}];
   return(
     <div style={{position:'fixed',bottom:0,left:'50%',transform:'translateX(-50%)',width:'100%',maxWidth:680,background:'var(--color-bg)',borderTop:'1px solid var(--color-border)',display:'flex',zIndex:50}}>
-      {tabs.map(tab=><button key={tab.id} onClick={()=>navigate(tab.id)} style={{flex:1,padding:'10px 8px 14px',background:'none',border:'none',cursor:'pointer',fontFamily:'var(--font)',color:view===tab.id?'var(--color-text)':'var(--color-text-tertiary)',fontWeight:view===tab.id?700:400,fontSize:10,display:'flex',flexDirection:'column',alignItems:'center',gap:2}}><span style={{fontSize:20}}>{tab.icon}</span>{tab.label}</button>)}
+      {tabs.map(tab=>(
+        <button key={tab.id} onClick={()=>navigate(tab.id)} style={{flex:1,padding:'10px 8px 14px',background:'none',border:'none',cursor:'pointer',fontFamily:'var(--font)',color:view===tab.id?'var(--color-text)':'var(--color-text-tertiary)',fontWeight:view===tab.id?700:400,fontSize:10,display:'flex',flexDirection:'column',alignItems:'center',gap:2,position:'relative'}}>
+          <span style={{fontSize:20}}>{tab.icon}</span>{tab.label}
+          {tab.id==='library'&&isDesktop&&pendingCount>0&&<span style={{position:'absolute',top:6,right:'calc(50% - 16px)',background:'#dc2626',color:'#fff',borderRadius:'50%',width:16,height:16,fontSize:9,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>{pendingCount}</span>}
+        </button>
+      ))}
+      {!isDesktop&&(
+        <button onClick={()=>navigate('quickupload')} style={{flex:1,padding:'10px 8px 14px',background:'none',border:'none',cursor:'pointer',fontFamily:'var(--font)',color:view==='quickupload'?'var(--color-text)':'var(--color-text-tertiary)',fontWeight:view==='quickupload'?700:400,fontSize:10,display:'flex',flexDirection:'column',alignItems:'center',gap:2,position:'relative'}}>
+          <span style={{fontSize:20}}>📤</span>Upload
+          {pendingCount>0&&<span style={{position:'absolute',top:6,right:'calc(50% - 16px)',background:'#dc2626',color:'#fff',borderRadius:'50%',width:16,height:16,fontSize:9,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>{pendingCount}</span>}
+        </button>
+      )}
       <button onClick={()=>navigate('quickreceive')} style={{flex:1.5,padding:'8px 8px 12px',background:'none',border:'none',cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2}}>
         <div style={{background:'#1d6b3a',borderRadius:10,padding:'5px 10px',color:'#fff',fontWeight:700,fontSize:11}}>Quick<br/>Receive</div>
       </button>
@@ -1640,6 +1885,7 @@ export default function App() {
   const [categories,setCategories]=useState([]);
   const [templates,setTemplates]=useState([]);
   const [mapData,setMapData]=useState(null);
+  const [pending,setPending]=useState([]);
   const [loading,setLoading]=useState(true);
   const [saveStatus,setSaveStatus]=useState('');
   const [navStack,setNavStack]=useState([{view:'home',params:{}}]);
@@ -1656,8 +1902,8 @@ export default function App() {
   function navigate(view,params={}){if(view===-1){setNavStack(prev=>prev.length>1?prev.slice(0,-1):prev);return;}window.history.pushState({idx:navStack.length},'');setNavStack(prev=>[...prev,{view,params}]);}
 
   useEffect(()=>{
-    Promise.all([api.getLibrary(),api.getStock(),api.getLocations(),api.getCategories(),api.getTemplates(),api.getMap()])
-      .then(([lib,stk,locs,cats,tmpls,map])=>{setLibrary(Array.isArray(lib)?lib:[]);setStock(Array.isArray(stk)?stk:[]);setLocations(Array.isArray(locs)&&locs.length?locs:DEFAULT_LOCATIONS);setCategories(Array.isArray(cats)&&cats.length?cats:DEFAULT_CATEGORIES);setTemplates(Array.isArray(tmpls)?tmpls:[]);setMapData(map&&!Array.isArray(map)&&typeof map==='object'&&'rooms'in map?map:{rooms:[],pins:[],lines:[],doors:[],bgImage:null});setLoading(false);})
+    Promise.all([api.getLibrary(),api.getStock(),api.getLocations(),api.getCategories(),api.getTemplates(),api.getMap(),api.getPending()])
+      .then(([lib,stk,locs,cats,tmpls,map,pend])=>{setLibrary(Array.isArray(lib)?lib:[]);setStock(Array.isArray(stk)?stk:[]);setLocations(Array.isArray(locs)&&locs.length?locs:DEFAULT_LOCATIONS);setCategories(Array.isArray(cats)&&cats.length?cats:DEFAULT_CATEGORIES);setTemplates(Array.isArray(tmpls)?tmpls:[]);setMapData(map&&!Array.isArray(map)&&typeof map==='object'&&'rooms'in map?map:{rooms:[],pins:[],lines:[],doors:[],bgImage:null});setPending(Array.isArray(pend)?pend:[]);setLoading(false);})
       .catch(()=>{setLocations(DEFAULT_LOCATIONS);setCategories(DEFAULT_CATEGORIES);setLoading(false);});
   },[]);
 
@@ -1710,13 +1956,17 @@ export default function App() {
 
   const appendStock=async entries=>{try{await api.post('stock',{entries});const updated=await api.getStock();if(Array.isArray(updated))setStock(updated);setSaveStatus('Saved ✓');setTimeout(()=>setSaveStatus(''),2000);}catch{setSaveStatus('Save failed');}};
 
+  const savePendingItem=async item=>{setPending(prev=>{const idx=prev.findIndex(p=>p.id===item.id);if(idx>=0){const n=[...prev];n[idx]=item;return n;}return[item,...prev];});try{await api.savePendingItem(item);}catch{}};
+  const deletePendingItem=async id=>{setPending(prev=>prev.filter(p=>p.id!==id));try{await api.deletePending(id);}catch{}};
+
   // Poll for remote changes every 30 s so concurrent users stay in sync
   useEffect(()=>{
     const id=setInterval(async()=>{
       try{
-        const[lib,stk]=await Promise.all([api.getLibrary(),api.getStock()]);
+        const[lib,stk,pend]=await Promise.all([api.getLibrary(),api.getStock(),api.getPending()]);
         if(Array.isArray(lib))setLibrary(lib);
         if(Array.isArray(stk))setStock(stk);
+        if(Array.isArray(pend))setPending(pend);
       }catch{}
     },30000);
     return()=>clearInterval(id);
@@ -1724,7 +1974,8 @@ export default function App() {
 
   if(loading)return(<div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',flexDirection:'column',gap:16}}><Spinner/><div style={{fontSize:14,color:'var(--color-text-secondary)'}}>Loading EMS Inventory...</div></div>);
 
-  const sharedProps={library,stock,locations,categories,templates,navigate};
+  const pendingCount=pending.filter(p=>p.status==='pending').length;
+  const sharedProps={library,stock,locations,categories,templates,navigate,pending};
 
   return(
     <div style={{width:'100%',maxWidth:isDesktop&&view==='map'?'100%':680,paddingBottom:72,background:'var(--color-bg)',minHeight:'100vh',margin:'0 auto',boxShadow:isDesktop?'0 0 0 1px rgba(0,0,0,0.06)':undefined}}>
@@ -1740,10 +1991,13 @@ export default function App() {
       {view==='additem'        &&<AddItemView {...sharedProps} libraryId={null} scanData={params.scanData} capturedPhoto={params.capturedPhoto} onSaveLibrary={saveLibrary} onSaveStock={saveStock}/>}
       {view==='edititem'       &&<AddItemView {...sharedProps} libraryId={params.libraryId} scanData={null} capturedPhoto={null} onSaveLibrary={saveLibrary} onSaveStock={saveStock}/>}
       {view==='quickreceive'   &&<QuickReceiveView {...sharedProps} onSaveStock={saveStock} onAppendStock={appendStock} onSaveLibrary={saveLibrary}/>}
+      {view==='quickupload'    &&<QuickUploadView {...sharedProps} prePhoto={params.prePhoto} onSavePendingItem={savePendingItem}/>}
+      {view==='pendingqueue'   &&<PendingQueueView {...sharedProps}/>}
+      {view==='reviewpending'  &&<ReviewPendingItemView {...sharedProps} pendingId={params.pendingId} onSaveLibrary={saveLibrary} onSaveStock={saveStock} onSavePendingItem={savePendingItem}/>}
       {view==='orderreport'    &&<OrderReportView {...sharedProps}/>}
       {view==='settings'       &&<SettingsView {...sharedProps} onSaveLocations={saveLocations} onSaveCategories={saveCategories} onSaveTemplates={saveTemplates} onSaveStock={saveStock}/>}
       {view==='edittemplate'   &&<TemplateEditorView {...sharedProps} templateId={params.templateId} onSaveTemplates={saveTemplates}/>}
-      <BottomNav view={view} navigate={navigate} isDesktop={isDesktop}/>
+      <BottomNav view={view} navigate={navigate} isDesktop={isDesktop} pendingCount={pendingCount}/>
     </div>
   );
 }
