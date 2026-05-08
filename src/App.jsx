@@ -76,13 +76,13 @@ function generateOrderReport(library, stock, categories) {
   const active = stock.filter(s => s.status === 'active');
   return categories.map(cat => {
     const items = library
-      .filter(item => item.category === cat.id && item.status !== 'inactive' && (item.stationPar || 0) > 0)
+      .filter(item => item.category === cat.id && item.status !== 'inactive' && ((item.sfotPar||0)+(item.hhaPar||0)) > 0)
       .map(item => {
         const entries      = active.filter(s => s.libraryId === item.id);
         const expired      = entries.filter(s => getStatus(s.expiration).type === 'expired').length;
         const expiringSoon = entries.filter(s => getStatus(s.expiration).type === 'soon').length;
         const usable       = entries.filter(s => getStatus(s.expiration).type !== 'expired').length;
-        const par          = item.stationPar || 0;
+        const par          = (item.sfotPar||0) + (item.hhaPar||0);
         const needed       = Math.max(0, par - usable);
         return { item, total: entries.length, expired, expiringSoon, usable, par, needed };
       });
@@ -157,12 +157,15 @@ const api = {
   saveTemplates: data   => api.post('templates', data),
   getMap:        ()     => api.get('map'),
   saveMap:       data   => api.post('map', data),
-  scan:      images     => fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ images }) }).then(r => r.json()).then(d => { if (d.error) throw new Error(d.error); return d; }),
+  scan:      (images, spreadsheet) => fetch('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ images, spreadsheet: spreadsheet||[] }) }).then(r => r.json()).then(d => { if (d.error) throw new Error(d.error); return d; }),
   quickscan: (image, library) => fetch('/api/quickscan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image, library }) }).then(r => r.json()).then(d => { if (d.error) throw new Error(d.error); return d; }),
   ndcLookup:        ndc  => fetch(`/api/ndc?ndc=${encodeURIComponent(ndc)}`).then(r => r.json()),
-  getPending:       ()   => api.get('pending'),
-  savePendingItem:  item => api.post('pending', { item }),
-  deletePending:    id   => api.post('pending', { deleteId: id }),
+  getPending:        ()    => api.get('pending'),
+  savePendingItem:   item  => api.post('pending', { item }),
+  deletePending:     id    => api.post('pending', { deleteId: id }),
+  getSpreadsheet:    ()    => api.get('spreadsheet'),
+  saveSpreadsheet:   rows  => api.post('spreadsheet', { rows }),
+  clearSpreadsheet:  ()    => api.post('spreadsheet', { clear: true }),
 };
 
 function Badge({ type, label }) {
@@ -513,9 +516,10 @@ function HomeView({ library, stock, locations, categories, navigate, onSaveStock
   const thisMonth   = validActive.filter(s => getStatus(s.expiration).type === 'soon');
   const soon90      = validActive.filter(s => getStatus(s.expiration).type === 'watch');
   const belowPar    = library.filter(item => {
-    if (item.status === 'inactive' || !item.stationPar) return false;
+    const totalPar = (item.sfotPar||0) + (item.hhaPar||0);
+    if (item.status === 'inactive' || !totalPar) return false;
     const usable = validActive.filter(s => s.libraryId === item.id && getStatus(s.expiration).type !== 'expired').length;
-    return usable < item.stationPar;
+    return usable < totalPar;
   });
   const needsAttention = library.filter(d => d.status !== 'inactive').map(drug => {
     const ds = validActive.filter(s => s.libraryId === drug.id);
@@ -1039,7 +1043,7 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
         {items.length===0&&<EmptyState icon="📋" title="No stock found" subtitle={q?`No results for "${q}"`:active.length===0?'No stock added yet — use Quick Receive or Add Stock':'No stock matches this filter'} action={active.length===0?<button onClick={()=>navigate('addstock',{})} style={{...btnG,padding:'10px 20px'}}>+ Add Stock</button>:null}/>}
         {items.map(({item,entries,worst})=>{
           const ws=SS[worst];const hasIssue=worst==='expired'||worst==='soon';
-          const par=item.stationPar||0;const usable=entries.filter(s=>getStatus(s.expiration).type!=='expired').length;const belowPar=par>0&&usable<par;
+          const par=(item.sfotPar||0)+(item.hhaPar||0);const usable=entries.filter(s=>getStatus(s.expiration).type!=='expired').length;const belowPar=par>0&&usable<par;
           const cat=categories.find(c=>c.id===item.category);
           const byLocation={};entries.forEach(s=>{const loc=locations.find(l=>l.id===s.locationId);const key=loc?.name||'Unknown';byLocation[key]=(byLocation[key]||0)+1;});
           const locationSummary=Object.entries(byLocation).map(([name,count])=>`${count} @ ${name}`).join(' · ');
@@ -1176,7 +1180,7 @@ function DrugDetailView({ libraryId, library, stock, locations, categories, navi
   const active=stock.filter(s=>s.libraryId===libraryId&&s.status==='active');
   const pulled=stock.filter(s=>s.libraryId===libraryId&&s.status==='pulled');
   const cat=categories.find(c=>c.id===item.category);
-  const par=item.stationPar||0;
+  const par=(item.sfotPar||0)+(item.hhaPar||0);
   const usable=active.filter(s=>getStatus(s.expiration).type!=='expired').length;
   const worst=worstStatus(active);const ws=SS[worst];
   const sorted=[...active].sort((a,b)=>{if(a.expiration==='NA'&&b.expiration==='NA')return 0;if(a.expiration==='NA')return 1;if(b.expiration==='NA')return -1;const da=parseExp(a.expiration),db=parseExp(b.expiration);if(!da&&!db)return 0;if(!da)return 1;if(!db)return -1;return da-db;});
@@ -1303,7 +1307,7 @@ function LibraryView({ library, stock, categories, navigate, pending }) {
         </div>
         {visible.map(item=>{
           const ds=active.filter(s=>s.libraryId===item.id);const worst=worstStatus(ds);const ws=SS[worst];const hasIssue=worst==='expired'||worst==='soon';
-          const cat=categories.find(c=>c.id===item.category);const par=item.stationPar||0;const usable=ds.filter(s=>getStatus(s.expiration).type!=='expired').length;const belowPar=par>0&&usable<par;
+          const cat=categories.find(c=>c.id===item.category);const par=(item.sfotPar||0)+(item.hhaPar||0);const usable=ds.filter(s=>getStatus(s.expiration).type!=='expired').length;const belowPar=par>0&&usable<par;
           return(
             <div key={item.id} onClick={()=>navigate('drugdetail',{libraryId:item.id})} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:item.status==='inactive'?'var(--color-bg-secondary)':'var(--color-bg)',border:hasIssue?`1.5px solid ${ws.border}`:'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',marginBottom:8,cursor:'pointer',opacity:item.status==='inactive'?0.6:1}}>
               <div style={{width:44,height:44,borderRadius:10,overflow:'hidden',flexShrink:0,background:'var(--color-bg-secondary)',display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -1330,7 +1334,7 @@ function LibraryView({ library, stock, categories, navigate, pending }) {
 function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locations, categories, navigate, onSaveLibrary, onSaveStock }) {
   const existing=libraryId?library.find(d=>d.id===libraryId):null;
   const fileRef=useRef(null);
-  const [form,setForm]=useState({name:existing?.name||scanData?.name||'',category:existing?.category||scanData?.category||categories[0]?.id||'',packagingType:existing?.packagingType||scanData?.packagingType||'vial',unit:existing?.unit||scanData?.unit||'',size:existing?.size||scanData?.size||'',notes:existing?.notes||scanData?.notes||'',stationPar:existing?.stationPar||'',status:existing?.status||'active',vendor:existing?.vendor||''});
+  const [form,setForm]=useState({name:existing?.name||scanData?.name||'',category:existing?.category||scanData?.category||categories[0]?.id||'',packagingType:existing?.packagingType||scanData?.packagingType||'vial',unit:existing?.unit||scanData?.unit||'',size:existing?.size||scanData?.size||'',notes:existing?.notes||scanData?.notes||'',sfotPar:existing?.sfotPar??'',hhaPar:existing?.hhaPar??'',status:existing?.status||'active',vendor:existing?.vendor||''});
   const [photo,setPhoto]=useState(existing?.profilePhoto||capturedPhoto||null);
   const [scanning,setScanning]=useState(false);
   const [scanError,setScanError]=useState(null);
@@ -1341,7 +1345,7 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
   const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
   const isEdit=!!existing;
 
-  async function handleSave(){setSaving(true);const id=existing?.id||uid();const updated={id,...form,profilePhoto:photo,stationPar:parseInt(form.stationPar)||0,addedAt:existing?.addedAt||new Date().toISOString()};await onSaveLibrary(existing?library.map(d=>d.id===id?updated:d):[updated,...library]);setSaving(false);if(!existing){setAddStockPrompt(id);}else{navigate('library');}}
+  async function handleSave(){setSaving(true);const id=existing?.id||uid();const updated={id,...form,profilePhoto:photo,sfotPar:parseInt(form.sfotPar)||0,hhaPar:parseInt(form.hhaPar)||0,addedAt:existing?.addedAt||new Date().toISOString()};await onSaveLibrary(existing?library.map(d=>d.id===id?updated:d):[updated,...library]);setSaving(false);if(!existing){setAddStockPrompt(id);}else{navigate('library');}}
   async function handlePhotoChange(e){const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=async ev=>setPhoto(await resizeImage(ev.target.result.split(',')[1],400));reader.readAsDataURL(file);}
 
   return(
@@ -1412,7 +1416,10 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
           <Field label="Unit"><input value={form.unit} onChange={set('unit')} placeholder="mL, mg, tablet..."/></Field>
           <Field label="Size / gauge"><input value={form.size} onChange={set('size')} placeholder="28fr, Large, 18ga..."/></Field>
         </div>
-        <Field label="Station par"><input value={form.stationPar} onChange={set('stationPar')} type="number" min="0" placeholder="0 = no par set"/></Field>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          <Field label="SFOT Par"><input value={form.sfotPar} onChange={set('sfotPar')} type="number" min="0" placeholder="0"/></Field>
+          <Field label="HHA Par"><input value={form.hhaPar} onChange={set('hhaPar')} type="number" min="0" placeholder="0"/></Field>
+        </div>
         <Field label="Notes"><input value={form.notes} onChange={set('notes')} placeholder="Route, storage, controlled substance schedule..."/></Field>
         <Field label="Vendor / supplier">
           <div style={{display:'flex',gap:8}}>
@@ -1530,7 +1537,7 @@ function OrderReportView({ library, stock, categories, navigate }) {
       const expired=entries.filter(s=>getStatus(s.expiration).type==='expired').length;
       const expiringSoon=entries.filter(s=>getStatus(s.expiration).type==='soon').length;
       const usable=entries.filter(s=>getStatus(s.expiration).type!=='expired').length;
-      const par=item.stationPar||0;
+      const par=(item.sfotPar||0)+(item.hhaPar||0);
       const needed=Math.max(0,par-usable);
       return{item,total:entries.length,expired,expiringSoon,usable,par,needed};
     })
@@ -1544,13 +1551,13 @@ function OrderReportView({ library, stock, categories, navigate }) {
   const allItems=report.flatMap(s=>s.items);
   const toOrder=allItems.filter(i=>i.needed>0);
   const belowPar=allItems.filter(i=>i.usable<i.par);
-  function exportCSV(){const rows=[['Category','Item','Station Par','Total Stock','Expired','Expiring This Month','Usable Stock','Order Qty','Status']];report.forEach(({category,items})=>{items.forEach(({item,total,expired,expiringSoon,usable,par,needed})=>{rows.push([category.name,item.name,par,total,expired,expiringSoon,usable,needed,needed>0?'ORDER':'OK']);});});const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`ems-order-report-${new Date().toISOString().slice(0,10)}.csv`;a.click();}
+  function exportCSV(){const rows=[['Category','Item','SFOT Par','HHA Par','Total Par','Total Stock','Expired','Expiring This Month','Usable Stock','Order Qty','Status']];report.forEach(({category,items})=>{items.forEach(({item,total,expired,expiringSoon,usable,par,needed})=>{rows.push([category.name,item.name,item.sfotPar||0,item.hhaPar||0,par,total,expired,expiringSoon,usable,needed,needed>0?'ORDER':'OK']);});});const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`ems-order-report-${new Date().toISOString().slice(0,10)}.csv`;a.click();}
   const vendorLabel=vendorFilter==='mckesson'?'McKesson':vendorFilter==='boundtree'?'Bound Tree':'All';
   function exportVendorCSV(){
-    const rows=[['Vendor','Item','Category','Total Stock','Expired','Expiring This Month','Usable Stock','Station Par','Need to Order','Status']];
+    const rows=[['Vendor','Item','Category','Total Stock','Expired','Expiring This Month','Usable Stock','SFOT Par','HHA Par','Total Par','Need to Order','Status']];
     (vendorItems||[]).forEach(({item,total,expired,expiringSoon,usable,par,needed})=>{
       const cat=categories.find(c=>c.id===item.category);
-      rows.push([vendorLabel,item.name,cat?.name||'',total,expired,expiringSoon,usable,par,needed,needed>0?'ORDER':expired>0?'EXPIRED':expiringSoon>0?'EXP SOON':'OK']);
+      rows.push([vendorLabel,item.name,cat?.name||'',total,expired,expiringSoon,usable,item.sfotPar||0,item.hhaPar||0,par,needed,needed>0?'ORDER':expired>0?'EXPIRED':expiringSoon>0?'EXP SOON':'OK']);
     });
     const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
     const a=document.createElement('a');
@@ -1576,7 +1583,7 @@ function OrderReportView({ library, stock, categories, navigate }) {
             {report.map(({category,items})=>(
               <div key={category.id} style={{marginBottom:24}}>
                 <SectionHeader title={`${category.icon} ${category.name}`}/>
-                {items.map(({item,total,expired,expiringSoon,usable,par,needed})=>{const isUrgent=needed>0&&expired>0;const isNeeded=needed>0;return<div key={item.id} style={{padding:'13px 14px',background:isUrgent?'var(--color-danger-bg)':isNeeded?'var(--color-warning-bg)':'var(--color-bg)',border:`1px solid ${isUrgent?'var(--color-danger-border)':isNeeded?'var(--color-warning-border)':'var(--color-border)'}`,borderRadius:'var(--radius-lg)',marginBottom:8}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><div style={{fontWeight:700,fontSize:14}}>{item.name}</div>{isNeeded?<span style={{background:isUrgent?'var(--color-danger-text)':'var(--color-warning-text)',color:'#fff',fontSize:12,fontWeight:700,padding:'3px 10px',borderRadius:20}}>ORDER {needed}{isUrgent?' ⚠':''}</span>:<span style={{fontSize:12,fontWeight:700,color:'var(--color-success-text)'}}>✓ OK</span>}</div><div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:4}}>{[['Station par',par],['Total stock',total],['Expired',expired,expired>0?'var(--color-danger-text)':null],['Expiring this month',expiringSoon,expiringSoon>0?'var(--color-warning-text)':null],['Usable stock',usable,usable<par?'var(--color-danger-text)':null],['Need to order',needed,needed>0?'var(--color-warning-text)':null]].map(([label,value,color])=><div key={label} style={{fontSize:12}}><span style={{color:'var(--color-text-secondary)'}}>{label}: </span><span style={{fontWeight:600,color:color||'var(--color-text)'}}>{value}</span></div>)}</div></div>;})}
+                {items.map(({item,total,expired,expiringSoon,usable,par,needed})=>{const isUrgent=needed>0&&expired>0;const isNeeded=needed>0;const sfot=item.sfotPar||0;const hha=item.hhaPar||0;return<div key={item.id} style={{padding:'13px 14px',background:isUrgent?'var(--color-danger-bg)':isNeeded?'var(--color-warning-bg)':'var(--color-bg)',border:`1px solid ${isUrgent?'var(--color-danger-border)':isNeeded?'var(--color-warning-border)':'var(--color-border)'}`,borderRadius:'var(--radius-lg)',marginBottom:8}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><div style={{fontWeight:700,fontSize:14}}>{item.name}</div>{isNeeded?<span style={{background:isUrgent?'var(--color-danger-text)':'var(--color-warning-text)',color:'#fff',fontSize:12,fontWeight:700,padding:'3px 10px',borderRadius:20}}>ORDER {needed}{isUrgent?' ⚠':''}</span>:<span style={{fontSize:12,fontWeight:700,color:'var(--color-success-text)'}}>✓ OK</span>}</div><div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:4}}>{[['SFOT par',sfot],['HHA par',hha],['Total stock',total],['Expired',expired,expired>0?'var(--color-danger-text)':null],['Expiring this month',expiringSoon,expiringSoon>0?'var(--color-warning-text)':null],['Usable stock',usable,usable<par?'var(--color-danger-text)':null],['Total par',par],['Need to order',needed,needed>0?'var(--color-warning-text)':null]].map(([label,value,color])=><div key={label} style={{fontSize:12}}><span style={{color:'var(--color-text-secondary)'}}>{label}: </span><span style={{fontWeight:600,color:color||'var(--color-text)'}}>{value}</span></div>)}</div></div>;})}
               </div>
             ))}
             {allItems.length===0&&<EmptyState icon="📋" title="No items with par set" subtitle="Set station par on library items to generate order reports" action={<button onClick={()=>navigate('library')} style={{...btnP,padding:'10px 20px'}}>Go to Library</button>}/>}
@@ -1767,16 +1774,80 @@ function QuickUploadView({ navigate, onSavePendingItem, prePhoto }) {
   );
 }
 
-function PendingQueueView({ pending, navigate }) {
+function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, onSavePendingItem }) {
   const [showComplete,setShowComplete]=useState(false);
+  const [rematching,setRematching]=useState(false);
+  const [rematchStatus,setRematchStatus]=useState('');
+  const fileRef=useRef(null);
   const pendingItems=pending.filter(p=>p.status==='pending');
   const completeItems=pending.filter(p=>p.status==='complete');
   const shown=showComplete?completeItems:pendingItems;
+
+  function parseCSV(text){
+    const lines=text.trim().split('\n');
+    if(lines.length<2)return[];
+    const header=lines[0].split(',').map(h=>h.replace(/^"|"$/g,'').trim());
+    const itemIdx=header.findIndex(h=>/^item$/i.test(h));
+    const sfotIdx=header.findIndex(h=>/sfot/i.test(h));
+    const hhaIdx=header.findIndex(h=>/hha/i.test(h));
+    if(itemIdx<0)return[];
+    return lines.slice(1).map(line=>{
+      const cols=line.match(/(".*?"|[^,]+|(?<=,)(?=,)|(?<=,)$|^(?=,))/g)||line.split(',');
+      const clean=cols.map(c=>c?.replace(/^"|"$/g,'').trim()||'');
+      return{item:clean[itemIdx]||'',sfotPar:sfotIdx>=0?parseInt(clean[sfotIdx])||0:0,hhaPar:hhaIdx>=0?parseInt(clean[hhaIdx])||0:0};
+    }).filter(r=>r.item);
+  }
+
+  async function handleFileUpload(e){
+    const file=e.target.files?.[0];if(!file)return;
+    const text=await file.text();
+    const rows=parseCSV(text);
+    if(!rows.length){alert('Could not parse CSV — make sure there is an "Item" column');return;}
+    await onSaveSpreadsheet(rows);
+    setRematchStatus(`✓ Uploaded ${rows.length} items`);
+    setTimeout(()=>setRematchStatus(''),3000);
+    e.target.value='';
+  }
+
+  async function rematchAll(){
+    if(!spreadsheet?.length){alert('Upload a spreadsheet first');return;}
+    const toRematch=pendingItems.filter(p=>p.photos?.length);
+    if(!toRematch.length){setRematchStatus('No pending items to match');return;}
+    setRematching(true);setRematchStatus(`Matching 0 / ${toRematch.length}...`);
+    let done=0;
+    for(const item of toRematch){
+      try{
+        const result=await api.scan(item.photos,spreadsheet);
+        if(result.sfotPar!=null||result.hhaPar!=null||result.spreadsheetMatch){
+          await onSavePendingItem({...item,prefilled:{...item.prefilled,sfotPar:result.sfotPar,hhaPar:result.hhaPar,spreadsheetMatch:result.spreadsheetMatch,name:result.name||item.prefilled?.name}});
+        }
+      }catch{}
+      done++;setRematchStatus(`Matching ${done} / ${toRematch.length}...`);
+    }
+    setRematching(false);setRematchStatus(`✓ Matched ${done} items`);
+    setTimeout(()=>setRematchStatus(''),4000);
+  }
 
   return(
     <div style={{paddingBottom:40}}>
       <TopBar title="Upload Queue" onBack={()=>navigate(-1)} subtitle={`${pendingItems.length} waiting for review`}/>
       <div style={{padding:'0 20px'}}>
+        <div style={{background:'var(--color-bg-secondary)',border:'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',padding:'14px',marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:600,color:'var(--color-text-secondary)',marginBottom:10}}>PAR SPREADSHEET</div>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+            <input ref={fileRef} type="file" accept=".csv" onChange={handleFileUpload} style={{display:'none'}}/>
+            <button onClick={()=>fileRef.current?.click()} style={{...btnS,padding:'8px 14px',fontSize:12,flexShrink:0}}>
+              {spreadsheet?.length?`📋 Replace (${spreadsheet.length} items)`:'📋 Upload CSV'}
+            </button>
+            {spreadsheet?.length>0&&(
+              <button onClick={rematchAll} disabled={rematching} style={{...btnP,padding:'8px 14px',fontSize:12,flexShrink:0,opacity:rematching?0.6:1}}>
+                {rematching?'Matching...':'🔄 Re-match all pending'}
+              </button>
+            )}
+          </div>
+          {rematchStatus&&<div style={{fontSize:12,color:'var(--color-success-text)',marginTop:8}}>{rematchStatus}</div>}
+          {!spreadsheet?.length&&<div style={{fontSize:11,color:'var(--color-text-tertiary)',marginTop:8}}>CSV needs columns: Item, SFOT Par count, HHA Par count</div>}
+        </div>
         <div style={{display:'flex',gap:0,marginBottom:16,borderBottom:'1px solid var(--color-border)'}}>
           {[['pending',`Pending (${pendingItems.length})`],['complete',`Complete (${completeItems.length})`]].map(([id,label])=>(
             <button key={id} onClick={()=>setShowComplete(id==='complete')} style={{flex:1,padding:'10px',border:'none',borderBottom:(showComplete?id==='complete':id==='pending')?'2px solid var(--color-text)':'2px solid transparent',background:'transparent',color:(showComplete?id==='complete':id==='pending')?'var(--color-text)':'var(--color-text-secondary)',fontWeight:(showComplete?id==='complete':id==='pending')?600:400,fontSize:13,cursor:'pointer',fontFamily:'var(--font)',marginBottom:-1}}>{label}</button>
@@ -1789,8 +1860,8 @@ function PendingQueueView({ pending, navigate }) {
             <div key={item.id} onClick={()=>!showComplete&&navigate('reviewpending',{pendingId:item.id})} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:'var(--color-bg)',border:'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',marginBottom:8,cursor:showComplete?'default':'pointer'}}>
               {item.photos?.[0]&&<img src={`data:image/jpeg;base64,${item.photos[0]}`} alt="" style={{width:56,height:56,objectFit:'cover',borderRadius:8,flexShrink:0}}/>}
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,fontWeight:600,marginBottom:2}}>{item.photos?.length||0} photo{item.photos?.length!==1?'s':''}</div>
-                {item.notes&&<div style={{fontSize:12,color:'var(--color-text-secondary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.notes}</div>}
+                <div style={{fontSize:13,fontWeight:600,marginBottom:2}}>{item.prefilled?.name||item.notes||`${item.photos?.length||0} photo${item.photos?.length!==1?'s':''}`}</div>
+                {item.prefilled?.spreadsheetMatch&&<div style={{fontSize:11,color:'#1d4ed8',marginBottom:1}}>📋 {item.prefilled.spreadsheetMatch}</div>}
                 <div style={{fontSize:11,color:'var(--color-text-tertiary)',marginTop:2}}>{new Date(item.submittedAt).toLocaleString()}</div>
               </div>
               {!showComplete&&<span style={{color:'var(--color-text-tertiary)',fontSize:18}}>›</span>}
@@ -1803,12 +1874,14 @@ function PendingQueueView({ pending, navigate }) {
   );
 }
 
-function ReviewPendingItemView({ pendingId, pending, library, stock, locations, categories, navigate, onSaveLibrary, onSaveStock, onSavePendingItem }) {
+function ReviewPendingItemView({ pendingId, pending, library, stock, locations, categories, spreadsheet, navigate, onSaveLibrary, onSaveStock, onSavePendingItem }) {
   const item=pending.find(p=>p.id===pendingId);
-  const [form,setForm]=useState({name:'',category:categories[0]?.id||'',packagingType:'vial',unit:'',size:'',notes:'',stationPar:'',status:'active',vendor:''});
+  const pre=item?.prefilled||{};
+  const [form,setForm]=useState({name:pre.name||'',category:categories[0]?.id||'',packagingType:'vial',unit:'',size:'',notes:'',sfotPar:pre.sfotPar!=null?String(pre.sfotPar):'',hhaPar:pre.hhaPar!=null?String(pre.hhaPar):'',status:'active',vendor:''});
   const [filling,setFilling]=useState(false);
   const [filled,setFilled]=useState(false);
   const [fillError,setFillError]=useState(null);
+  const [spreadsheetMatch,setSpreadsheetMatch]=useState(pre.spreadsheetMatch||null);
   const [saving,setSaving]=useState(false);
   const [addStockPrompt,setAddStockPrompt]=useState(null);
   const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
@@ -1816,10 +1889,11 @@ function ReviewPendingItemView({ pendingId, pending, library, stock, locations, 
   if(!item)return null;
 
   async function aiFill(){
-    setFilling(true);setFillError(null);
+    setFilling(true);setFillError(null);setSpreadsheetMatch(null);
     try{
-      const result=await api.scan(item.photos);
-      setForm(f=>({...f,name:result.name||f.name,category:categories.find(c=>c.id===result.category)?.id||result.category||f.category,packagingType:result.packagingType||f.packagingType,unit:result.unit||f.unit,size:result.size||f.size,notes:result.notes||f.notes}));
+      const result=await api.scan(item.photos, spreadsheet);
+      setForm(f=>({...f,name:result.name||f.name,category:categories.find(c=>c.id===result.category)?.id||result.category||f.category,packagingType:result.packagingType||f.packagingType,unit:result.unit||f.unit,size:result.size||f.size,notes:result.notes||f.notes,sfotPar:result.sfotPar!=null?String(result.sfotPar):f.sfotPar,hhaPar:result.hhaPar!=null?String(result.hhaPar):f.hhaPar}));
+      if(result.spreadsheetMatch)setSpreadsheetMatch(result.spreadsheetMatch);
       setFilled(true);
     }catch{setFillError('Could not read label — fill in manually below');}
     setFilling(false);
@@ -1828,7 +1902,7 @@ function ReviewPendingItemView({ pendingId, pending, library, stock, locations, 
   async function handleSave(){
     setSaving(true);
     const newId=uid();
-    const newItem={id:newId,...form,profilePhoto:item.photos?.[0]||null,stationPar:parseInt(form.stationPar)||0,addedAt:new Date().toISOString()};
+    const newItem={id:newId,...form,profilePhoto:item.photos?.[0]||null,sfotPar:parseInt(form.sfotPar)||0,hhaPar:parseInt(form.hhaPar)||0,addedAt:new Date().toISOString()};
     await onSaveLibrary([newItem,...library]);
     await onSavePendingItem({...item,status:'complete'});
     setSaving(false);
@@ -1850,11 +1924,12 @@ function ReviewPendingItemView({ pendingId, pending, library, stock, locations, 
             {filling?'Reading label photos...':'🤖 AI Fill — read label photos'}
           </button>
         ):(
-          <div style={{background:'var(--color-success-bg)',color:'var(--color-success-text)',border:'1px solid var(--color-success-border)',padding:'10px 14px',borderRadius:'var(--radius-md)',marginBottom:16,fontSize:13,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{background:'var(--color-success-bg)',color:'var(--color-success-text)',border:'1px solid var(--color-success-border)',padding:'10px 14px',borderRadius:'var(--radius-md)',marginBottom:spreadsheetMatch?0:16,fontSize:13,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
             <span>✓ AI filled — review and adjust below</span>
             <button onClick={aiFill} style={{background:'none',border:'none',cursor:'pointer',color:'var(--color-success-text)',fontSize:12,fontFamily:'var(--font)',textDecoration:'underline'}}>Refill</button>
           </div>
         )}
+        {spreadsheetMatch&&<div style={{background:'#eff6ff',color:'#1d4ed8',border:'1px solid #bfdbfe',padding:'8px 14px',borderRadius:'0 0 var(--radius-md) var(--radius-md)',marginBottom:16,fontSize:12}}>📋 Matched spreadsheet: <strong>{spreadsheetMatch}</strong></div>}
         {fillError&&<div style={{fontSize:12,color:'var(--color-danger-text)',marginBottom:12}}>{fillError}</div>}
         <Field label="Item name *"><input value={form.name} onChange={set('name')} placeholder="e.g. Aspirin 325mg, NPA 28fr, Tourniquet"/></Field>
         <Field label="Category">
@@ -1867,7 +1942,10 @@ function ReviewPendingItemView({ pendingId, pending, library, stock, locations, 
           <Field label="Unit"><input value={form.unit} onChange={set('unit')} placeholder="mL, mg, tablet..."/></Field>
           <Field label="Size / gauge"><input value={form.size} onChange={set('size')} placeholder="28fr, Large, 18ga..."/></Field>
         </div>
-        <Field label="Station par"><input value={form.stationPar} onChange={set('stationPar')} type="number" min="0" placeholder="0 = no par set"/></Field>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          <Field label="SFOT Par"><input value={form.sfotPar} onChange={set('sfotPar')} type="number" min="0" placeholder="0"/></Field>
+          <Field label="HHA Par"><input value={form.hhaPar} onChange={set('hhaPar')} type="number" min="0" placeholder="0"/></Field>
+        </div>
         <Field label="Notes"><input value={form.notes} onChange={set('notes')} placeholder="Route, storage, controlled substance schedule..."/></Field>
         <Field label="Vendor / supplier">
           <div style={{display:'flex',gap:8}}>
@@ -1928,6 +2006,7 @@ export default function App() {
   const [templates,setTemplates]=useState([]);
   const [mapData,setMapData]=useState(null);
   const [pending,setPending]=useState([]);
+  const [spreadsheet,setSpreadsheet]=useState([]);
   const [loading,setLoading]=useState(true);
   const [saveStatus,setSaveStatus]=useState('');
   const [navStack,setNavStack]=useState([{view:'home',params:{}}]);
@@ -1944,8 +2023,8 @@ export default function App() {
   function navigate(view,params={}){if(view===-1){setNavStack(prev=>prev.length>1?prev.slice(0,-1):prev);return;}window.history.pushState({idx:navStack.length},'');setNavStack(prev=>[...prev,{view,params}]);}
 
   useEffect(()=>{
-    Promise.all([api.getLibrary(),api.getStock(),api.getLocations(),api.getCategories(),api.getTemplates(),api.getMap(),api.getPending()])
-      .then(([lib,stk,locs,cats,tmpls,map,pend])=>{setLibrary(Array.isArray(lib)?lib:[]);setStock(Array.isArray(stk)?stk:[]);setLocations(Array.isArray(locs)&&locs.length?locs:DEFAULT_LOCATIONS);setCategories(Array.isArray(cats)&&cats.length?cats:DEFAULT_CATEGORIES);setTemplates(Array.isArray(tmpls)?tmpls:[]);setMapData(map&&!Array.isArray(map)&&typeof map==='object'&&'rooms'in map?map:{rooms:[],pins:[],lines:[],doors:[],bgImage:null});setPending(Array.isArray(pend)?pend:[]);setLoading(false);})
+    Promise.all([api.getLibrary(),api.getStock(),api.getLocations(),api.getCategories(),api.getTemplates(),api.getMap(),api.getPending(),api.getSpreadsheet()])
+      .then(([lib,stk,locs,cats,tmpls,map,pend,sheet])=>{setLibrary(Array.isArray(lib)?lib:[]);setStock(Array.isArray(stk)?stk:[]);setLocations(Array.isArray(locs)&&locs.length?locs:DEFAULT_LOCATIONS);setCategories(Array.isArray(cats)&&cats.length?cats:DEFAULT_CATEGORIES);setTemplates(Array.isArray(tmpls)?tmpls:[]);setMapData(map&&!Array.isArray(map)&&typeof map==='object'&&'rooms'in map?map:{rooms:[],pins:[],lines:[],doors:[],bgImage:null});setPending(Array.isArray(pend)?pend:[]);setSpreadsheet(Array.isArray(sheet)?sheet:[]);setLoading(false);})
       .catch(()=>{setLocations(DEFAULT_LOCATIONS);setCategories(DEFAULT_CATEGORIES);setLoading(false);});
   },[]);
 
@@ -2000,6 +2079,7 @@ export default function App() {
 
   const savePendingItem=async item=>{setPending(prev=>{const idx=prev.findIndex(p=>p.id===item.id);if(idx>=0){const n=[...prev];n[idx]=item;return n;}return[item,...prev];});try{await api.savePendingItem(item);}catch{}};
   const deletePendingItem=async id=>{setPending(prev=>prev.filter(p=>p.id!==id));try{await api.deletePending(id);}catch{}};
+  const saveSpreadsheet=async rows=>{setSpreadsheet(rows);try{await api.saveSpreadsheet(rows);}catch{}};
 
   // Poll for remote changes every 30 s so concurrent users stay in sync
   useEffect(()=>{
@@ -2017,7 +2097,7 @@ export default function App() {
   if(loading)return(<div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',flexDirection:'column',gap:16}}><Spinner/><div style={{fontSize:14,color:'var(--color-text-secondary)'}}>Loading EMS Inventory...</div></div>);
 
   const pendingCount=pending.filter(p=>p.status==='pending').length;
-  const sharedProps={library,stock,locations,categories,templates,navigate,pending};
+  const sharedProps={library,stock,locations,categories,templates,navigate,pending,spreadsheet};
 
   return(
     <div style={{width:'100%',maxWidth:isDesktop&&view==='map'?'100%':680,paddingBottom:72,background:'var(--color-bg)',minHeight:'100vh',margin:'0 auto',boxShadow:isDesktop?'0 0 0 1px rgba(0,0,0,0.06)':undefined}}>
@@ -2034,7 +2114,7 @@ export default function App() {
       {view==='edititem'       &&<AddItemView {...sharedProps} libraryId={params.libraryId} scanData={null} capturedPhoto={null} onSaveLibrary={saveLibrary} onSaveStock={saveStock}/>}
       {view==='quickreceive'   &&<QuickReceiveView {...sharedProps} onSaveStock={saveStock} onAppendStock={appendStock} onSaveLibrary={saveLibrary}/>}
       {view==='quickupload'    &&<QuickUploadView {...sharedProps} prePhoto={params.prePhoto} onSavePendingItem={savePendingItem}/>}
-      {view==='pendingqueue'   &&<PendingQueueView {...sharedProps}/>}
+      {view==='pendingqueue'   &&<PendingQueueView {...sharedProps} onSaveSpreadsheet={saveSpreadsheet} onSavePendingItem={savePendingItem}/>}
       {view==='reviewpending'  &&<ReviewPendingItemView {...sharedProps} pendingId={params.pendingId} onSaveLibrary={saveLibrary} onSaveStock={saveStock} onSavePendingItem={savePendingItem}/>}
       {view==='orderreport'    &&<OrderReportView {...sharedProps}/>}
       {view==='settings'       &&<SettingsView {...sharedProps} onSaveLocations={saveLocations} onSaveCategories={saveCategories} onSaveTemplates={saveTemplates} onSaveStock={saveStock}/>}
