@@ -1254,13 +1254,14 @@ function AddStockView({ libraryId, locationId, library, stock, locations, naviga
   return null;
 }
 
-function LibraryView({ library, stock, categories, navigate }) {
+function LibraryView({ library, stock, categories, navigate, pending }) {
   const [search,setSearch]=useState('');
   const [showInactive,setShowInactive]=useState(false);
   const active=stock.filter(s=>s.status==='active');
   const q=search.trim().toLowerCase();
   const visible=library.filter(d=>showInactive||d.status!=='inactive').filter(d=>!q||d.name.toLowerCase().includes(q)).sort((a,b)=>{const order=['expired','soon','watch','none','good'];const wa=worstStatus(active.filter(s=>s.libraryId===a.id));const wb=worstStatus(active.filter(s=>s.libraryId===b.id));if(wa!==wb)return order.indexOf(wa)-order.indexOf(wb);return a.name.localeCompare(b.name);});
   const inactiveCount=library.filter(d=>d.status==='inactive').length;
+  const pendingCount=(pending||[]).filter(p=>p.status==='pending').length;
   return(
     <div style={{paddingBottom:20}}>
       <div style={{padding:'16px 20px 0',marginBottom:16,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
@@ -1268,6 +1269,15 @@ function LibraryView({ library, stock, categories, navigate }) {
         <button onClick={()=>navigate('additem')} style={{...btnP,padding:'7px 14px',fontSize:13}}>+ Add</button>
       </div>
       <div style={{padding:'0 20px'}}>
+        {pendingCount>0&&(
+          <div onClick={()=>navigate('pendingqueue')} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 16px',background:'var(--color-warning-bg)',border:'1px solid var(--color-warning-border)',borderRadius:'var(--radius-lg)',marginBottom:16,cursor:'pointer'}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:'var(--color-warning-text)'}}>📥 {pendingCount} item{pendingCount!==1?'s':''} waiting for review</div>
+              <div style={{fontSize:12,color:'var(--color-warning-text)',opacity:0.8,marginTop:2}}>Tap to open the upload queue</div>
+            </div>
+            <span style={{fontSize:20,color:'var(--color-warning-text)'}}>›</span>
+          </div>
+        )}
         <div style={{position:'relative',marginBottom:14}}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:'var(--color-text-tertiary)',pointerEvents:'none'}}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{paddingLeft:30,paddingRight:search?30:10}}/>
