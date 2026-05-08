@@ -1790,16 +1790,30 @@ function PendingQueueView({ pending, spreadsheet, navigate, onSaveSpreadsheet, o
   const shown=showComplete?completeItems:pendingItems;
 
   function parseCSV(text){
-    const lines=text.trim().split('\n');
+    function splitLine(line){
+      const cols=[];let i=0;
+      while(i<=line.length){
+        if(line[i]==='"'){
+          let j=i+1,val='';
+          while(j<line.length){if(line[j]==='"'&&line[j+1]==='"'){val+='"';j+=2;}else if(line[j]==='"'){j++;break;}else{val+=line[j++];}}
+          cols.push(val);i=j+1;
+        }else{
+          const end=line.indexOf(',',i);
+          if(end<0){cols.push(line.slice(i).trim());break;}
+          cols.push(line.slice(i,end).trim());i=end+1;
+        }
+      }
+      return cols;
+    }
+    const lines=text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').trim().split('\n');
     if(lines.length<2)return[];
-    const header=lines[0].split(',').map(h=>h.replace(/^"|"$/g,'').trim());
+    const header=splitLine(lines[0]).map(h=>h.trim());
     const itemIdx=header.findIndex(h=>/^item$/i.test(h));
     const sfotIdx=header.findIndex(h=>/sfot/i.test(h));
     const hhaIdx=header.findIndex(h=>/hha/i.test(h));
     if(itemIdx<0)return[];
     return lines.slice(1).map(line=>{
-      const cols=line.match(/(".*?"|[^,]+|(?<=,)(?=,)|(?<=,)$|^(?=,))/g)||line.split(',');
-      const clean=cols.map(c=>c?.replace(/^"|"$/g,'').trim()||'');
+      const clean=splitLine(line);
       return{item:clean[itemIdx]||'',sfotPar:sfotIdx>=0?parseInt(clean[sfotIdx])||0:0,hhaPar:hhaIdx>=0?parseInt(clean[hhaIdx])||0:0};
     }).filter(r=>r.item);
   }
@@ -1890,6 +1904,8 @@ function ReviewPendingItemView({ pendingId, pending, library, stock, locations, 
   const [spreadsheetMatch,setSpreadsheetMatch]=useState(pre.spreadsheetMatch||null);
   const [saving,setSaving]=useState(false);
   const [addStockPrompt,setAddStockPrompt]=useState(null);
+  const [showSheet,setShowSheet]=useState(false);
+  const [sheetSearch,setSheetSearch]=useState('');
   const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
 
   if(!item)return null;
@@ -1925,6 +1941,33 @@ function ReviewPendingItemView({ pendingId, pending, library, stock, locations, 
           ))}
         </div>
         {item.notes&&<div style={{background:'var(--color-bg-secondary)',border:'1px solid var(--color-border)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:14,fontSize:13,color:'var(--color-text-secondary)'}}>Note: {item.notes}</div>}
+        {spreadsheet?.length>0&&(
+          <div style={{marginBottom:14,border:'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',overflow:'hidden'}}>
+            <button onClick={()=>setShowSheet(s=>!s)} style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 14px',background:'var(--color-bg-secondary)',border:'none',cursor:'pointer',fontFamily:'var(--font)',fontSize:13,fontWeight:600}}>
+              <span>📋 PAR reference ({spreadsheet.length} items)</span>
+              <span style={{color:'var(--color-text-tertiary)',fontSize:16}}>{showSheet?'▲':'▼'}</span>
+            </button>
+            {showSheet&&(
+              <div>
+                <div style={{padding:'8px 10px',borderTop:'1px solid var(--color-border)',background:'var(--color-bg)'}}>
+                  <input value={sheetSearch} onChange={e=>setSheetSearch(e.target.value)} placeholder="Search spreadsheet..." style={{fontSize:12,padding:'6px 10px'}}/>
+                </div>
+                <div style={{maxHeight:220,overflowY:'auto'}}>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:0,fontSize:11,fontWeight:700,color:'var(--color-text-tertiary)',padding:'4px 12px',borderBottom:'1px solid var(--color-border)',background:'var(--color-bg-secondary)'}}>
+                    <span>ITEM</span><span style={{textAlign:'right',paddingRight:12}}>SFOT</span><span style={{textAlign:'right'}}>HHA</span>
+                  </div>
+                  {spreadsheet.filter(r=>!sheetSearch||r.item.toLowerCase().includes(sheetSearch.toLowerCase())).map((row,i)=>(
+                    <button key={i} onClick={()=>{setForm(f=>({...f,sfotPar:String(row.sfotPar),hhaPar:String(row.hhaPar),name:f.name||row.item}));setSpreadsheetMatch(row.item);setShowSheet(false);}} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:0,width:'100%',padding:'8px 12px',background:'none',border:'none',borderBottom:'1px solid var(--color-border)',cursor:'pointer',fontFamily:'var(--font)',textAlign:'left',fontSize:12}}>
+                      <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',paddingRight:8}}>{row.item}</span>
+                      <span style={{fontWeight:600,color:'#1d6b3a',textAlign:'right',paddingRight:12}}>{row.sfotPar||'—'}</span>
+                      <span style={{fontWeight:600,color:'#1d4ed8',textAlign:'right'}}>{row.hhaPar||'—'}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {!filled?(
           <button onClick={aiFill} disabled={filling} style={{...btnP,width:'100%',marginBottom:16,opacity:filling?0.7:1}}>
             {filling?'Reading label photos...':'🤖 AI Fill — read label photos'}
