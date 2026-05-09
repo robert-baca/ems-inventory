@@ -1017,6 +1017,103 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
   );
 }
 
+function TakeInventoryView({ library, stock, categories, navigate }) {
+  const [counts, setCounts] = useState({});
+  const [search, setSearch] = useState('');
+  const [activeTab, setActiveTab] = useState('all');
+  const active = stock.filter(s => s.status === 'active');
+  const q = search.trim().toLowerCase();
+  const items = library
+    .filter(d => d.status !== 'inactive')
+    .filter(d => activeTab === 'all' || d.category === activeTab)
+    .filter(d => !q || d.name.toLowerCase().includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const countedCount = items.filter(i => counts[i.id] !== undefined && counts[i.id] !== '').length;
+  const belowParCount = items.filter(i => {
+    const par = (i.sfotPar || 0) + (i.hhaPar || 0);
+    const n = parseInt(counts[i.id]);
+    return par > 0 && !isNaN(n) && n < par;
+  }).length;
+
+  function exportCSV() {
+    const rows = [['Item', 'Category', 'Vendor', 'SFOT Par', 'HHA Par', 'Total Par', 'System Count', 'Physical Count', 'Difference', 'Status']];
+    library.filter(d => d.status !== 'inactive').sort((a, b) => a.name.localeCompare(b.name)).forEach(item => {
+      const cat = categories.find(c => c.id === item.category);
+      const par = (item.sfotPar || 0) + (item.hhaPar || 0);
+      const systemCount = active.filter(s => s.libraryId === item.id).length;
+      const raw = counts[item.id];
+      const physical = raw !== undefined && raw !== '' ? parseInt(raw) : '';
+      const diff = physical !== '' ? physical - systemCount : '';
+      const status = physical === '' ? 'NOT COUNTED' : par > 0 && physical < par ? 'BELOW PAR' : physical === 0 ? 'EMPTY' : 'OK';
+      rows.push([item.name, cat?.name || '', item.vendor || '', item.sfotPar || 0, item.hhaPar || 0, par || '', systemCount, physical, diff, status]);
+    });
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    a.download = `inventory-count-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  }
+
+  return (
+    <div style={{ paddingBottom: 20 }}>
+      <TopBar title="Take Inventory" onBack={() => navigate(-1)} right={<button onClick={exportCSV} style={{ ...btnS, padding: '7px 14px', fontSize: 12 }}>Export CSV</button>} />
+      <div style={{ padding: '0 20px', marginBottom: 12 }}>
+        <div style={{ background: 'var(--color-bg-secondary)', borderRadius: 'var(--radius-md)', padding: '10px 16px', display: 'flex', gap: 20, fontSize: 13 }}>
+          <span><strong>{countedCount}</strong> / {items.length} counted</span>
+          {belowParCount > 0 && <span style={{ color: 'var(--color-danger-text)', fontWeight: 600 }}>⚠ {belowParCount} below par</span>}
+          {countedCount > 0 && countedCount === items.length && <span style={{ color: 'var(--color-success-text)', fontWeight: 600 }}>✓ All done</span>}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 0, padding: '0 20px', overflowX: 'auto', marginBottom: 12, borderBottom: '1px solid var(--color-border)' }}>
+        <button onClick={() => setActiveTab('all')} style={{ flexShrink: 0, padding: '8px 14px', border: 'none', borderBottom: activeTab === 'all' ? '2px solid var(--color-text)' : '2px solid transparent', background: 'transparent', color: activeTab === 'all' ? 'var(--color-text)' : 'var(--color-text-secondary)', fontWeight: activeTab === 'all' ? 700 : 400, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font)', marginBottom: -1 }}>All</button>
+        {categories.map(cat => <button key={cat.id} onClick={() => setActiveTab(cat.id)} style={{ flexShrink: 0, padding: '8px 14px', border: 'none', borderBottom: activeTab === cat.id ? '2px solid var(--color-text)' : '2px solid transparent', background: 'transparent', color: activeTab === cat.id ? 'var(--color-text)' : 'var(--color-text-secondary)', fontWeight: activeTab === cat.id ? 700 : 400, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font)', marginBottom: -1 }}>{cat.icon} {cat.name}</button>)}
+      </div>
+      <div style={{ padding: '0 20px' }}>
+        <div style={{ position: 'relative', marginBottom: 14 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-tertiary)', pointerEvents: 'none' }}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search items..." style={{ paddingLeft: 30 }} />
+        </div>
+        {items.map(item => {
+          const cat = categories.find(c => c.id === item.category);
+          const par = (item.sfotPar || 0) + (item.hhaPar || 0);
+          const systemCount = active.filter(s => s.libraryId === item.id).length;
+          const raw = counts[item.id];
+          const isCounted = raw !== undefined && raw !== '';
+          const physical = isCounted ? parseInt(raw) : null;
+          const belowPar = par > 0 && isCounted && physical < par;
+          const atPar = par > 0 && isCounted && physical >= par;
+          return (
+            <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: 'var(--color-bg)', border: `1px solid ${belowPar ? 'var(--color-danger-border)' : atPar ? 'var(--color-success-border)' : 'var(--color-border)'}`, borderRadius: 'var(--radius-lg)', marginBottom: 8 }}>
+              <span style={{ fontSize: 20, flexShrink: 0 }}>{cat?.icon || '📦'}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div>
+                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 1 }}>
+                  {par > 0 ? `Par: ${par}` : 'No par'} · System: {systemCount}
+                  {item.vendor ? ` · ${item.vendor}` : ''}
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                <input
+                  type="number" min="0" inputMode="numeric"
+                  placeholder="—"
+                  value={raw ?? ''}
+                  onChange={e => setCounts(prev => ({ ...prev, [item.id]: e.target.value }))}
+                  style={{ width: 64, textAlign: 'center', fontWeight: 700, fontSize: 18, padding: '6px 4px', border: `2px solid ${belowPar ? 'var(--color-danger-border)' : atPar ? 'var(--color-success-border)' : 'var(--color-border)'}`, borderRadius: 8, background: belowPar ? 'var(--color-danger-bg)' : atPar ? 'var(--color-success-bg)' : 'var(--color-bg)', color: belowPar ? 'var(--color-danger-text)' : atPar ? 'var(--color-success-text)' : 'var(--color-text)', fontFamily: 'var(--font)' }}
+                />
+                {isCounted && <span style={{ fontSize: 10, color: belowPar ? 'var(--color-danger-text)' : atPar ? 'var(--color-success-text)' : 'var(--color-text-tertiary)', fontWeight: 600 }}>
+                  {belowPar ? `${physical - par} low` : atPar ? '✓ ok' : ''}
+                </span>}
+              </div>
+            </div>
+          );
+        })}
+        {items.length === 0 && <EmptyState icon="📋" title="No items" subtitle={q ? `No results for "${q}"` : 'No active items'} />}
+      </div>
+    </div>
+  );
+}
+
 function InventoryView({ library, stock, locations, categories, navigate, onSaveCategories, onSaveStock }) {
   const [activeTab, setActiveTab]   = useState('all');
   const [filter, setFilter]         = useState('all');
@@ -1056,7 +1153,10 @@ function InventoryView({ library, stock, locations, categories, navigate, onSave
     <div style={{paddingBottom:20}}>
       <div style={{padding:'16px 20px 0',marginBottom:12,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
         <h2 style={{fontSize:20,fontWeight:700}}>Inventory</h2>
-        <button onClick={()=>navigate('addstock',{})} style={{...btnG,padding:'7px 14px',fontSize:13}}>+ Add Stock</button>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>navigate('takeinventory')} style={{...btnS,padding:'7px 12px',fontSize:13}}>📋 Count</button>
+          <button onClick={()=>navigate('addstock',{})} style={{...btnG,padding:'7px 14px',fontSize:13}}>+ Add Stock</button>
+        </div>
       </div>
       <div style={{display:'flex',gap:0,padding:'0 20px',overflowX:'auto',marginBottom:12,borderBottom:'1px solid var(--color-border)'}}>
         <button onClick={()=>setActiveTab('all')} style={{flexShrink:0,padding:'8px 14px',border:'none',borderBottom:activeTab==='all'?'2px solid var(--color-text)':'2px solid transparent',background:'transparent',color:activeTab==='all'?'var(--color-text)':'var(--color-text-secondary)',fontWeight:activeTab==='all'?700:400,fontSize:14,cursor:'pointer',fontFamily:'var(--font)',marginBottom:-1}}>All</button>
@@ -2301,6 +2401,7 @@ export default function App() {
       {view==='map'            &&<MapView {...sharedProps} mapData={mapData} onSaveMap={saveMap} onSaveLocations={saveLocations}/>}
       {view==='locationdetail' &&<LocationDetailView {...sharedProps} locationId={params.locationId} onSaveStock={saveStock}/>}
       {view==='inventory'      &&<InventoryView {...sharedProps} onSaveCategories={saveCategories} onSaveStock={saveStock}/>}
+      {view==='takeinventory'  &&<TakeInventoryView {...sharedProps}/>}
       {view==='library'        &&<LibraryView {...sharedProps}/>}
       {view==='vendorlist'     &&<VendorListView {...sharedProps} onSaveLibrary={saveLibrary}/>}
       {view==='drugdetail'     &&<DrugDetailView {...sharedProps} libraryId={params.libraryId} onSaveStock={saveStock} onSaveLibrary={saveLibrary}/>}
