@@ -1017,7 +1017,7 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
   );
 }
 
-function TakeInventoryView({ library, stock, categories, locations, navigate, onSaveStock }) {
+function TakeInventoryView({ library, stock, categories, locations, navigate, onSaveStock, onSaveLocations }) {
   // counts: { [libraryId]: { [locationId]: string } }
   const [counts, setCounts] = useState({});
   // extraLocs: { [libraryId]: locationId[] } — locations added manually
@@ -1027,6 +1027,10 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
   const [activeTab, setActiveTab] = useState('all');
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [newLocFor, setNewLocFor] = useState(null); // libraryId that triggered new-location flow
+  const [newLocName, setNewLocName] = useState('');
+  const LOC_ICONS = ['📦','🎒','🛒','🚑','🏥','💊','🧰','🗄️','🚪','⬜'];
+  const [newLocIcon, setNewLocIcon] = useState('📦');
 
   const active = stock.filter(s => s.status === 'active');
   const q = search.trim().toLowerCase();
@@ -1057,6 +1061,14 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
   function addExtraLoc(libraryId, locationId) {
     setExtraLocs(prev => ({ ...prev, [libraryId]: [...new Set([...(prev[libraryId] || []), locationId])] }));
     setExpanded(prev => ({ ...prev, [libraryId]: true }));
+  }
+
+  function confirmNewLoc() {
+    if (!newLocName.trim() || !newLocFor) return;
+    const loc = { id: uid(), name: newLocName.trim(), icon: newLocIcon, type: 'bag', templateId: null };
+    onSaveLocations([...locations, loc]);
+    addExtraLoc(newLocFor, loc.id);
+    setNewLocFor(null); setNewLocName(''); setNewLocIcon('📦');
   }
 
   const countedCount = items.filter(i => itemHasCount(i.id)).length;
@@ -1223,9 +1235,10 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
                   {/* Add location row */}
                   {availableToAdd.length > 0 && (
                     <div style={{ padding: '8px 14px', borderTop: locRows.length > 0 ? '1px solid var(--color-border)' : 'none', background: 'var(--color-bg)' }}>
-                      <select defaultValue="" onChange={e => { if (e.target.value) { addExtraLoc(item.id, e.target.value); e.target.value = ''; } }} onClick={e => e.stopPropagation()} style={{ width: '100%', padding: '7px 10px', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--color-border)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 13, fontFamily: 'var(--font)', cursor: 'pointer' }}>
+                      <select defaultValue="" onChange={e => { const v = e.target.value; e.target.value = ''; if (v === '__new__') { setNewLocFor(item.id); setNewLocName(''); setNewLocIcon('📦'); } else if (v) { addExtraLoc(item.id, v); } }} onClick={e => e.stopPropagation()} style={{ width: '100%', padding: '7px 10px', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--color-border)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 13, fontFamily: 'var(--font)', cursor: 'pointer' }}>
                         <option value="">+ Add another location...</option>
                         {availableToAdd.map(l => <option key={l.id} value={l.id}>{l.icon} {l.name}</option>)}
+                        <option value="__new__">✚ Create new location...</option>
                       </select>
                     </div>
                   )}
@@ -1247,6 +1260,30 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
           </div>
         )}
       </div>
+
+      {newLocFor && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 400, padding: 24 }}>
+          <div style={{ background: 'var(--color-bg)', borderRadius: 'var(--radius-lg)', padding: '24px 20px', width: '100%', maxWidth: 340 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>New Location</div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)', marginBottom: 5 }}>Name</label>
+              <input value={newLocName} onChange={e => setNewLocName(e.target.value)} placeholder="e.g. ALS Bag 3, Drug Safe..." autoFocus onKeyDown={e => { if (e.key === 'Enter') confirmNewLoc(); }} />
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)', marginBottom: 8 }}>Icon</label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {LOC_ICONS.map(icon => (
+                  <button key={icon} onClick={() => setNewLocIcon(icon)} style={{ width: 38, height: 38, borderRadius: 8, border: newLocIcon === icon ? '2px solid var(--color-text)' : '1px solid var(--color-border)', background: newLocIcon === icon ? 'var(--color-bg-secondary)' : 'transparent', fontSize: 20, cursor: 'pointer' }}>{icon}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setNewLocFor(null)} style={{ ...btnS, flex: 1 }}>Cancel</button>
+              <button onClick={confirmNewLoc} disabled={!newLocName.trim()} style={{ ...btnP, flex: 1, opacity: newLocName.trim() ? 1 : 0.45 }}>Add location</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmOpen && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: 24 }}>
@@ -2565,7 +2602,7 @@ export default function App() {
       {view==='map'            &&<MapView {...sharedProps} mapData={mapData} onSaveMap={saveMap} onSaveLocations={saveLocations}/>}
       {view==='locationdetail' &&<LocationDetailView {...sharedProps} locationId={params.locationId} onSaveStock={saveStock}/>}
       {view==='inventory'      &&<InventoryView {...sharedProps} onSaveCategories={saveCategories} onSaveStock={saveStock}/>}
-      {view==='takeinventory'  &&<TakeInventoryView {...sharedProps} onSaveStock={saveStock}/>}
+      {view==='takeinventory'  &&<TakeInventoryView {...sharedProps} onSaveStock={saveStock} onSaveLocations={saveLocations}/>}
       {view==='library'        &&<LibraryView {...sharedProps}/>}
       {view==='vendorlist'     &&<VendorListView {...sharedProps} onSaveLibrary={saveLibrary}/>}
       {view==='drugdetail'     &&<DrugDetailView {...sharedProps} libraryId={params.libraryId} onSaveStock={saveStock} onSaveLibrary={saveLibrary}/>}
