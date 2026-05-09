@@ -1500,6 +1500,7 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
   const [expirations,setExpirations]=useState([]);
   const [sessionCount,setSessionCount]=useState(0);
   const [vendor,setVendor]=useState('');
+  const [libSearch,setLibSearch]=useState('');
   const [countMode,setCountMode]=useState('each');
   const [boxSize,setBoxSize]=useState('');
   const quick=[1,2,3,4,5,6];
@@ -1507,7 +1508,7 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
   function handleScanConfirm(result, photo){const matched=result.matchedId?library.find(d=>d.id===result.matchedId)||null:null;setCapturedPhoto(photo);setScanResult(result);setMatchedItem(matched);setVendor(matched?.vendor||'');setPhase('location');}
   function handleCountNext(){let n;if(countMode==='box')n=(parseInt(count)||0)*(parseInt(boxSize)||1);else if(countMode==='pct')n=parseInt(count)>0?1:0;else n=parseInt(count)||0;if(!n||n<1)return;setExpirations(Array(n).fill(scanResult?.expiration||''));setPhase('expirations');}
   async function handleSave(){const newEntries=expirations.map(exp=>({id:uid(),libraryId:matchedItem.id,locationId:selectedLocation,expiration:exp||'NA',status:'active',addedAt:new Date().toISOString(),lot:scanResult?.lot||'',barcode:scanResult?.barcode||''}));if(matchedItem&&vendor!==(matchedItem.vendor||'')){await onSaveLibrary(library.map(d=>d.id===matchedItem.id?{...d,vendor}:d));}if(onAppendStock){await onAppendStock(newEntries);}else{onSaveStock([...stock,...newEntries]);}setSessionCount(c=>c+parseInt(count));setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);setVendor('');}
-  function reset(){setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);setVendor('');setCountMode('each');setBoxSize('');}
+  function reset(){setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);setVendor('');setLibSearch('');setCountMode('each');setBoxSize('');}
 
   if(phase==='camera')return(
     <div>
@@ -1522,7 +1523,10 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
     </div>
   );
 
-  if(phase==='location')return(
+  if(phase==='location'){
+    const lsq=libSearch.trim().toLowerCase();
+    const libResults=lsq?library.filter(d=>d.status!=='inactive'&&d.name.toLowerCase().includes(lsq)).slice(0,6):[];
+    return(
     <div>
       <TopBar title="Quick Receive" onBack={reset}/>
       <div style={{padding:'0 20px'}}>
@@ -1550,7 +1554,17 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
           </div>
         )}
         {!matchedItem?(
-          <><button onClick={()=>navigate('additem',{scanData:{name:scanResult?.matchedName||'',notes:[scanResult?.route,scanResult?.dosageForm].filter(Boolean).join(', '),barcode:scanResult?.barcode||''},capturedPhoto})} style={{...btnP,width:'100%',marginBottom:10}}>Add to library</button><button onClick={()=>navigate('quickupload',{prePhoto:capturedPhoto||undefined})} style={{...btnS,width:'100%',marginBottom:10}}>📤 Quick Upload — review later</button><button onClick={reset} style={{...btnS,width:'100%'}}>Skip — scan next</button></>
+          <>
+            <div style={{position:'relative',marginBottom:10}}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:'var(--color-text-tertiary)',pointerEvents:'none'}}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input value={libSearch} onChange={e=>setLibSearch(e.target.value)} placeholder="Search library to match manually..." style={{paddingLeft:30}}/>
+            </div>
+            {lsq&&libResults.length>0&&<div style={{marginBottom:12}}>{libResults.map(item=><button key={item.id} onClick={()=>{setMatchedItem(item);setVendor(item.vendor||'');setLibSearch('');}} style={{display:'flex',alignItems:'center',gap:10,width:'100%',padding:'10px 14px',borderRadius:'var(--radius-md)',border:'1px solid var(--color-border)',background:'var(--color-bg)',cursor:'pointer',fontFamily:'var(--font)',marginBottom:6,textAlign:'left'}}>{item.profilePhoto&&<img src={`data:image/jpeg;base64,${item.profilePhoto}`} alt="" style={{width:36,height:36,objectFit:'cover',borderRadius:6,flexShrink:0}}/>}<span style={{fontWeight:600,fontSize:13}}>{item.name}</span></button>)}</div>}
+            {lsq&&libResults.length===0&&<div style={{fontSize:12,color:'var(--color-text-tertiary)',marginBottom:12,textAlign:'center'}}>No matches in library</div>}
+            <button onClick={()=>navigate('additem',{scanData:{name:scanResult?.matchedName||'',notes:[scanResult?.route,scanResult?.dosageForm].filter(Boolean).join(', '),barcode:scanResult?.barcode||''},capturedPhoto})} style={{...btnP,width:'100%',marginBottom:10}}>Add to library</button>
+            <button onClick={()=>navigate('quickupload',{prePhoto:capturedPhoto||undefined})} style={{...btnS,width:'100%',marginBottom:10}}>📤 Quick Upload — review later</button>
+            <button onClick={reset} style={{...btnS,width:'100%'}}>Skip — scan next</button>
+          </>
         ):(
           <><div style={{fontSize:13,fontWeight:600,marginBottom:10}}>Where is this going?</div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:16,maxHeight:280,overflowY:'auto'}}>
@@ -1560,7 +1574,7 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
         )}
       </div>
     </div>
-  );
+  );}
 
   if(phase==='count'){const unitCount=countMode==='box'?(parseInt(count)||0)*(parseInt(boxSize)||1):countMode==='pct'?(parseInt(count)>0?1:0):(parseInt(count)||0);return(<div><TopBar title={matchedItem?.name} onBack={()=>setPhase('location')}/><div style={{padding:'0 20px'}}><div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:16,fontSize:13,color:'var(--color-text-secondary)',textAlign:'center'}}>→ {locations.find(l=>l.id===selectedLocation)?.name}<br/>How many?</div><div style={{display:'flex',gap:6,marginBottom:16}}>{[['each','Each'],['box','Boxes'],['pct','%']].map(([m,label])=><button key={m} onClick={()=>{setCountMode(m);setCount('');setBoxSize('');}} style={{flex:1,padding:'10px',borderRadius:'var(--radius-md)',border:'none',background:countMode===m?'#1a1a1a':'var(--color-bg-secondary)',color:countMode===m?'#fff':'var(--color-text)',fontWeight:countMode===m?700:400,fontSize:14,cursor:'pointer',fontFamily:'var(--font)'}}>{label}</button>)}</div>{countMode==='each'&&<><div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:12}}>{quick.map(n=><button key={n} onClick={()=>setCount(String(n))} style={{padding:'14px',borderRadius:'var(--radius-md)',border:count===String(n)?'none':'1px solid var(--color-border)',background:count===String(n)?'#1a1a1a':'var(--color-bg-secondary)',color:count===String(n)?'#fff':'var(--color-text)',fontWeight:700,fontSize:18,cursor:'pointer',fontFamily:'var(--font)'}}>{n}</button>)}</div><input value={count} onChange={e=>setCount(e.target.value)} type="number" min="1" placeholder="Other amount" style={{textAlign:'center',fontWeight:600,fontSize:16,marginBottom:16}}/></>}{countMode==='box'&&<div style={{marginBottom:16}}><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}><div><div style={{fontSize:12,color:'var(--color-text-secondary)',marginBottom:6}}>Boxes</div><input value={count} onChange={e=>setCount(e.target.value)} type="number" min="1" placeholder="e.g. 3" style={{textAlign:'center',fontWeight:600,fontSize:18}}/></div><div><div style={{fontSize:12,color:'var(--color-text-secondary)',marginBottom:6}}>Units per box</div><input value={boxSize} onChange={e=>setBoxSize(e.target.value)} type="number" min="1" placeholder="e.g. 10" style={{textAlign:'center',fontWeight:600,fontSize:18}}/></div></div>{unitCount>0&&<div style={{textAlign:'center',fontSize:15,fontWeight:700,color:'var(--color-success-text)',padding:'10px',background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)'}}>= {unitCount} units</div>}</div>}{countMode==='pct'&&<div style={{marginBottom:16}}><div style={{fontSize:12,color:'var(--color-text-secondary)',marginBottom:6,textAlign:'center'}}>% remaining in container</div><input value={count} onChange={e=>setCount(e.target.value)} type="number" min="0" max="100" placeholder="e.g. 75" style={{textAlign:'center',fontWeight:600,fontSize:24,marginBottom:10}}/><div style={{textAlign:'center',fontSize:12,color:'var(--color-text-secondary)'}}>{parseInt(count)>0?'= 1 unit in inventory':'Enter a percentage'}</div></div>}<button onClick={handleCountNext} disabled={!unitCount} style={{...btnG,width:'100%',opacity:unitCount>0?1:0.45}}>Next → {unitCount>0?`${unitCount} unit${unitCount!==1?'s':''}`:' expiration dates'}</button></div></div>);}
 
