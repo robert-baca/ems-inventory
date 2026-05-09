@@ -1017,10 +1017,15 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
   );
 }
 
-function TakeInventoryView({ library, stock, categories, navigate }) {
+function TakeInventoryView({ library, stock, categories, locations, navigate }) {
+  // counts: { [libraryId]: { [locationId]: string } }
   const [counts, setCounts] = useState({});
+  // extraLocs: { [libraryId]: locationId[] } — locations added manually
+  const [extraLocs, setExtraLocs] = useState({});
+  const [expanded, setExpanded] = useState({});
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState('all');
+
   const active = stock.filter(s => s.status === 'active');
   const q = search.trim().toLowerCase();
   const items = library
@@ -1029,24 +1034,56 @@ function TakeInventoryView({ library, stock, categories, navigate }) {
     .filter(d => !q || d.name.toLowerCase().includes(q))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const countedCount = items.filter(i => counts[i.id] !== undefined && counts[i.id] !== '').length;
+  function getLocRows(libraryId) {
+    const stockLocs = [...new Set(active.filter(s => s.libraryId === libraryId).map(s => s.locationId))];
+    const extras = extraLocs[libraryId] || [];
+    return [...new Set([...stockLocs, ...extras])];
+  }
+
+  function setCount(libraryId, locationId, value) {
+    setCounts(prev => ({ ...prev, [libraryId]: { ...(prev[libraryId] || {}), [locationId]: value } }));
+  }
+
+  function getItemTotal(libraryId) {
+    return Object.values(counts[libraryId] || {}).reduce((s, v) => s + (parseInt(v) || 0), 0);
+  }
+
+  function itemHasCount(libraryId) {
+    return Object.values(counts[libraryId] || {}).some(v => v !== '');
+  }
+
+  function addExtraLoc(libraryId, locationId) {
+    setExtraLocs(prev => ({ ...prev, [libraryId]: [...new Set([...(prev[libraryId] || []), locationId])] }));
+    setExpanded(prev => ({ ...prev, [libraryId]: true }));
+  }
+
+  const countedCount = items.filter(i => itemHasCount(i.id)).length;
   const belowParCount = items.filter(i => {
     const par = (i.sfotPar || 0) + (i.hhaPar || 0);
-    const n = parseInt(counts[i.id]);
-    return par > 0 && !isNaN(n) && n < par;
+    return par > 0 && itemHasCount(i.id) && getItemTotal(i.id) < par;
   }).length;
 
   function exportCSV() {
-    const rows = [['Item', 'Category', 'Vendor', 'SFOT Par', 'HHA Par', 'Total Par', 'System Count', 'Physical Count', 'Difference', 'Status']];
+    const rows = [['Item', 'Category', 'Vendor', 'Location', 'Physical Count', 'System Count (location)', 'SFOT Par', 'HHA Par', 'Total Par', 'Item Total Physical', 'Status']];
     library.filter(d => d.status !== 'inactive').sort((a, b) => a.name.localeCompare(b.name)).forEach(item => {
       const cat = categories.find(c => c.id === item.category);
       const par = (item.sfotPar || 0) + (item.hhaPar || 0);
-      const systemCount = active.filter(s => s.libraryId === item.id).length;
-      const raw = counts[item.id];
-      const physical = raw !== undefined && raw !== '' ? parseInt(raw) : '';
-      const diff = physical !== '' ? physical - systemCount : '';
-      const status = physical === '' ? 'NOT COUNTED' : par > 0 && physical < par ? 'BELOW PAR' : physical === 0 ? 'EMPTY' : 'OK';
-      rows.push([item.name, cat?.name || '', item.vendor || '', item.sfotPar || 0, item.hhaPar || 0, par || '', systemCount, physical, diff, status]);
+      const locRows = getLocRows(item.id);
+      const itemTotal = getItemTotal(item.id);
+      if (locRows.length === 0) {
+        const systemCount = active.filter(s => s.libraryId === item.id).length;
+        const status = !itemHasCount(item.id) ? 'NOT COUNTED' : par > 0 && itemTotal < par ? 'BELOW PAR' : itemTotal === 0 ? 'EMPTY' : 'OK';
+        rows.push([item.name, cat?.name || '', item.vendor || '', '', '', systemCount, item.sfotPar || 0, item.hhaPar || 0, par || '', '', status]);
+      } else {
+        locRows.forEach((locId, idx) => {
+          const loc = locations.find(l => l.id === locId);
+          const sysAtLoc = active.filter(s => s.libraryId === item.id && s.locationId === locId).length;
+          const raw = (counts[item.id] || {})[locId];
+          const physical = raw !== undefined && raw !== '' ? parseInt(raw) : '';
+          const status = idx === 0 ? (!itemHasCount(item.id) ? 'NOT COUNTED' : par > 0 && itemTotal < par ? 'BELOW PAR' : itemTotal === 0 ? 'EMPTY' : 'OK') : '';
+          rows.push([item.name, cat?.name || '', item.vendor || '', loc?.name || locId, physical, sysAtLoc, idx === 0 ? (item.sfotPar || 0) : '', idx === 0 ? (item.hhaPar || 0) : '', idx === 0 ? (par || '') : '', idx === 0 ? (itemHasCount(item.id) ? itemTotal : '') : '', status]);
+        });
+      }
     });
     const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
     const a = document.createElement('a');
@@ -1077,34 +1114,70 @@ function TakeInventoryView({ library, stock, categories, navigate }) {
         {items.map(item => {
           const cat = categories.find(c => c.id === item.category);
           const par = (item.sfotPar || 0) + (item.hhaPar || 0);
-          const systemCount = active.filter(s => s.libraryId === item.id).length;
-          const raw = counts[item.id];
-          const isCounted = raw !== undefined && raw !== '';
-          const physical = isCounted ? parseInt(raw) : null;
-          const belowPar = par > 0 && isCounted && physical < par;
-          const atPar = par > 0 && isCounted && physical >= par;
+          const total = getItemTotal(item.id);
+          const hasCounts = itemHasCount(item.id);
+          const belowPar = par > 0 && hasCounts && total < par;
+          const atPar = par > 0 && hasCounts && total >= par;
+          const isOpen = !!expanded[item.id];
+          const locRows = getLocRows(item.id);
+          const availableToAdd = locations.filter(l => !locRows.includes(l.id));
+
           return (
-            <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: 'var(--color-bg)', border: `1px solid ${belowPar ? 'var(--color-danger-border)' : atPar ? 'var(--color-success-border)' : 'var(--color-border)'}`, borderRadius: 'var(--radius-lg)', marginBottom: 8 }}>
-              <span style={{ fontSize: 20, flexShrink: 0 }}>{cat?.icon || '📦'}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div>
-                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 1 }}>
-                  {par > 0 ? `Par: ${par}` : 'No par'} · System: {systemCount}
-                  {item.vendor ? ` · ${item.vendor}` : ''}
+            <div key={item.id} style={{ marginBottom: 10 }}>
+              {/* Header row */}
+              <div onClick={() => setExpanded(prev => ({ ...prev, [item.id]: !prev[item.id] }))} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', background: 'var(--color-bg)', border: `1px solid ${belowPar ? 'var(--color-danger-border)' : atPar ? 'var(--color-success-border)' : 'var(--color-border)'}`, borderRadius: isOpen ? 'var(--radius-lg) var(--radius-lg) 0 0' : 'var(--radius-lg)', borderBottom: isOpen ? 'none' : undefined, cursor: 'pointer' }}>
+                <span style={{ fontSize: 18, flexShrink: 0 }}>{cat?.icon || '📦'}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 1 }}>
+                    {par > 0 ? `Par: ${par}` : 'No par'}{item.vendor ? ` · ${item.vendor}` : ''}
+                  </div>
                 </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  {hasCounts ? (
+                    <div style={{ fontWeight: 700, fontSize: 17, color: belowPar ? 'var(--color-danger-text)' : atPar ? 'var(--color-success-text)' : 'var(--color-text)' }}>{total}</div>
+                  ) : (
+                    <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>tap to count</div>
+                  )}
+                  {locRows.length > 0 && <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>{locRows.length} location{locRows.length !== 1 ? 's' : ''}</div>}
+                </div>
+                <span style={{ color: 'var(--color-text-tertiary)', fontSize: 12, marginLeft: 4 }}>{isOpen ? '▲' : '▼'}</span>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-                <input
-                  type="number" min="0" inputMode="numeric"
-                  placeholder="—"
-                  value={raw ?? ''}
-                  onChange={e => setCounts(prev => ({ ...prev, [item.id]: e.target.value }))}
-                  style={{ width: 64, textAlign: 'center', fontWeight: 700, fontSize: 18, padding: '6px 4px', border: `2px solid ${belowPar ? 'var(--color-danger-border)' : atPar ? 'var(--color-success-border)' : 'var(--color-border)'}`, borderRadius: 8, background: belowPar ? 'var(--color-danger-bg)' : atPar ? 'var(--color-success-bg)' : 'var(--color-bg)', color: belowPar ? 'var(--color-danger-text)' : atPar ? 'var(--color-success-text)' : 'var(--color-text)', fontFamily: 'var(--font)' }}
-                />
-                {isCounted && <span style={{ fontSize: 10, color: belowPar ? 'var(--color-danger-text)' : atPar ? 'var(--color-success-text)' : 'var(--color-text-tertiary)', fontWeight: 600 }}>
-                  {belowPar ? `${physical - par} low` : atPar ? '✓ ok' : ''}
-                </span>}
-              </div>
+
+              {/* Expanded location rows */}
+              {isOpen && (
+                <div style={{ border: '1px solid var(--color-border)', borderTop: 'none', borderRadius: '0 0 var(--radius-lg) var(--radius-lg)', overflow: 'hidden' }}>
+                  {locRows.map((locId, i) => {
+                    const loc = locations.find(l => l.id === locId);
+                    const sysAtLoc = active.filter(s => s.libraryId === item.id && s.locationId === locId).length;
+                    const val = (counts[item.id] || {})[locId] ?? '';
+                    return (
+                      <div key={locId} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--color-bg-secondary)', borderTop: i > 0 ? '1px solid var(--color-border)' : 'none' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>{loc?.icon} {loc?.name || locId}</div>
+                          <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>System: {sysAtLoc} unit{sysAtLoc !== 1 ? 's' : ''}</div>
+                        </div>
+                        <input
+                          type="number" min="0" inputMode="numeric" placeholder="0"
+                          value={val}
+                          onChange={e => setCount(item.id, locId, e.target.value)}
+                          onClick={e => e.stopPropagation()}
+                          style={{ width: 64, textAlign: 'center', fontWeight: 700, fontSize: 18, padding: '6px 4px', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font)' }}
+                        />
+                      </div>
+                    );
+                  })}
+                  {/* Add location row */}
+                  {availableToAdd.length > 0 && (
+                    <div style={{ padding: '8px 14px', borderTop: locRows.length > 0 ? '1px solid var(--color-border)' : 'none', background: 'var(--color-bg)' }}>
+                      <select defaultValue="" onChange={e => { if (e.target.value) { addExtraLoc(item.id, e.target.value); e.target.value = ''; } }} onClick={e => e.stopPropagation()} style={{ width: '100%', padding: '7px 10px', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--color-border)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 13, fontFamily: 'var(--font)', cursor: 'pointer' }}>
+                        <option value="">+ Add another location...</option>
+                        {availableToAdd.map(l => <option key={l.id} value={l.id}>{l.icon} {l.name}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
