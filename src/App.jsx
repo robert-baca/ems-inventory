@@ -1046,30 +1046,16 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
     return [...new Set([...stockLocs, ...extras])];
   }
 
-  // entry shape: { mode: 'each'|'box'|'pct', val: string, boxSize: string }
-  function setCountField(libraryId, locationId, field, value) {
-    setCounts(prev => ({
-      ...prev,
-      [libraryId]: {
-        ...(prev[libraryId] || {}),
-        [locationId]: { mode: 'each', boxSize: '', val: '', ...(prev[libraryId]?.[locationId] || {}), [field]: value }
-      }
-    }));
-  }
-
-  function entryTotal(entry) {
-    if (!entry || entry.val === '') return null;
-    if (entry.mode === 'box') return (parseInt(entry.val) || 0) * (parseInt(entry.boxSize) || 1);
-    if (entry.mode === 'pct') return (parseInt(entry.val) || 0) > 0 ? 1 : 0;
-    return parseInt(entry.val) || 0;
+  function setCount(libraryId, locationId, value) {
+    setCounts(prev => ({ ...prev, [libraryId]: { ...(prev[libraryId] || {}), [locationId]: value } }));
   }
 
   function getItemTotal(libraryId) {
-    return Object.values(counts[libraryId] || {}).reduce((s, e) => s + (entryTotal(e) ?? 0), 0);
+    return Object.values(counts[libraryId] || {}).reduce((s, v) => s + (parseInt(v) || 0), 0);
   }
 
   function itemHasCount(libraryId) {
-    return Object.values(counts[libraryId] || {}).some(e => e && e.val !== '');
+    return Object.values(counts[libraryId] || {}).some(v => v !== '');
   }
 
   function addExtraLoc(libraryId, locationId) {
@@ -1106,10 +1092,8 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
         locRows.forEach((locId, idx) => {
           const loc = locations.find(l => l.id === locId);
           const sysAtLoc = active.filter(s => s.libraryId === item.id && s.locationId === locId).length;
-          const entry = (counts[item.id] || {})[locId];
-          const tot = entryTotal(entry);
-          const physical = tot !== null ? tot : '';
-          const modeLabel = !entry ? '' : entry.mode === 'box' ? `${entry.val || 0} boxes × ${entry.boxSize || 1}` : entry.mode === 'pct' ? `${entry.val || 0}%` : '';
+          const raw = (counts[item.id] || {})[locId];
+          const physical = raw !== undefined && raw !== '' ? parseInt(raw) : '';
           const status = idx === 0 ? (!itemHasCount(item.id) ? 'NOT COUNTED' : par > 0 && itemTotal < par ? 'BELOW PAR' : itemTotal === 0 ? 'EMPTY' : 'OK') : '';
           rows.push([item.name, cat?.name || '', item.vendor || '', loc?.name || locId, physical, sysAtLoc, idx === 0 ? (item.sfotPar || 0) : '', idx === 0 ? (item.hhaPar || 0) : '', idx === 0 ? (par || '') : '', idx === 0 ? (itemHasCount(item.id) ? itemTotal : '') : '', status]);
         });
@@ -1126,9 +1110,9 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
     let added = 0, removed = 0, itemsAffected = 0;
     Object.entries(counts).forEach(([libraryId, locCounts]) => {
       let changed = false;
-      Object.entries(locCounts).forEach(([locationId, entry]) => {
-        if (!entry || entry.val === '') return;
-        const n = entryTotal(entry) ?? 0;
+      Object.entries(locCounts).forEach(([locationId, raw]) => {
+        if (raw === '' || raw === undefined) return;
+        const n = parseInt(raw) || 0;
         const cur = active.filter(s => s.libraryId === libraryId && s.locationId === locationId).length;
         const diff = n - cur;
         if (diff > 0) { added += diff; changed = true; }
@@ -1144,9 +1128,9 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
     setApplying(true);
     let newStock = [...stock];
     Object.entries(counts).forEach(([libraryId, locCounts]) => {
-      Object.entries(locCounts).forEach(([locationId, entry]) => {
-        if (!entry || entry.val === '') return;
-        const newCount = entryTotal(entry) ?? 0;
+      Object.entries(locCounts).forEach(([locationId, raw]) => {
+        if (raw === '' || raw === undefined) return;
+        const newCount = parseInt(raw) || 0;
         const current = newStock.filter(s => s.status === 'active' && s.libraryId === libraryId && s.locationId === locationId);
         const diff = newCount - current.length;
         if (diff < 0) {
@@ -1231,45 +1215,17 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
                   {locRows.map((locId, i) => {
                     const loc = locations.find(l => l.id === locId);
                     const sysAtLoc = active.filter(s => s.libraryId === item.id && s.locationId === locId).length;
-                    const entry = (counts[item.id] || {})[locId] || { mode: 'each', val: '', boxSize: '' };
-                    const mode = entry.mode || 'each';
-                    const locTotal = entryTotal(entry);
+                    const val = (counts[item.id] || {})[locId] ?? '';
                     return (
-                      <div key={locId} style={{ padding: '10px 14px', background: 'var(--color-bg-secondary)', borderTop: i > 0 ? '1px solid var(--color-border)' : 'none' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: 600, fontSize: 13 }}>{loc?.icon} {loc?.name || locId}</div>
-                            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>System: {sysAtLoc} unit{sysAtLoc !== 1 ? 's' : ''}{locTotal !== null ? ` · Counted: ${locTotal}` : ''}</div>
-                          </div>
-                          <select value={mode} onChange={e => { e.stopPropagation(); setCountField(item.id, locId, 'mode', e.target.value); }} onClick={e => e.stopPropagation()} style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid var(--color-border)', background: 'var(--color-bg)', color: 'var(--color-text)', fontSize: 12, fontFamily: 'var(--font)', cursor: 'pointer' }}>
-                            <option value="each">Each</option>
-                            <option value="box">Boxes</option>
-                            <option value="pct">%</option>
-                          </select>
+                      <div key={locId} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--color-bg-secondary)', borderTop: i > 0 ? '1px solid var(--color-border)' : 'none' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>{loc?.icon} {loc?.name || locId}</div>
+                          <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>System: {sysAtLoc} unit{sysAtLoc !== 1 ? 's' : ''}</div>
                         </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }} onClick={e => e.stopPropagation()}>
-                          {mode === 'each' && (
-                            <input type="number" min="0" inputMode="numeric" placeholder="0" value={entry.val}
-                              onChange={e => setCountField(item.id, locId, 'val', e.target.value)}
-                              style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 18, padding: '7px 4px', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font)' }} />
-                          )}
-                          {mode === 'box' && (<>
-                            <input type="number" min="0" inputMode="numeric" placeholder="0 boxes" value={entry.val}
-                              onChange={e => setCountField(item.id, locId, 'val', e.target.value)}
-                              style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 16, padding: '7px 4px', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font)' }} />
-                            <span style={{ color: 'var(--color-text-tertiary)', fontSize: 13, flexShrink: 0 }}>×</span>
-                            <input type="number" min="1" inputMode="numeric" placeholder="qty/box" value={entry.boxSize}
-                              onChange={e => setCountField(item.id, locId, 'boxSize', e.target.value)}
-                              style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 16, padding: '7px 4px', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font)' }} />
-                            {entry.val && entry.boxSize && <span style={{ color: 'var(--color-success-text)', fontSize: 12, fontWeight: 600, flexShrink: 0 }}>= {(parseInt(entry.val)||0)*(parseInt(entry.boxSize)||1)}</span>}
-                          </>)}
-                          {mode === 'pct' && (<>
-                            <input type="number" min="0" max="100" inputMode="numeric" placeholder="0" value={entry.val}
-                              onChange={e => setCountField(item.id, locId, 'val', e.target.value)}
-                              style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 18, padding: '7px 4px', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font)' }} />
-                            <span style={{ color: 'var(--color-text-secondary)', fontSize: 16, fontWeight: 600 }}>%</span>
-                          </>)}
-                        </div>
+                        <input type="number" min="0" inputMode="numeric" placeholder="0" value={val}
+                          onChange={e => setCount(item.id, locId, e.target.value)}
+                          onClick={e => e.stopPropagation()}
+                          style={{ width: 64, textAlign: 'center', fontWeight: 700, fontSize: 18, padding: '6px 4px', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font)' }} />
                       </div>
                     );
                   })}
@@ -1840,12 +1796,14 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
   const [expirations,setExpirations]=useState([]);
   const [sessionCount,setSessionCount]=useState(0);
   const [vendor,setVendor]=useState('');
+  const [countMode,setCountMode]=useState('each');
+  const [boxSize,setBoxSize]=useState('');
   const quick=[1,2,3,4,5,6];
 
   function handleScanConfirm(result, photo){const matched=result.matchedId?library.find(d=>d.id===result.matchedId)||null:null;setCapturedPhoto(photo);setScanResult(result);setMatchedItem(matched);setVendor(matched?.vendor||'');setPhase('location');}
-  function handleCountNext(){const n=parseInt(count);if(!n||n<1)return;setExpirations(Array(n).fill(scanResult?.expiration||''));setPhase('expirations');}
+  function handleCountNext(){let n;if(countMode==='box')n=(parseInt(count)||0)*(parseInt(boxSize)||1);else if(countMode==='pct')n=parseInt(count)>0?1:0;else n=parseInt(count)||0;if(!n||n<1)return;setExpirations(Array(n).fill(scanResult?.expiration||''));setPhase('expirations');}
   async function handleSave(){const newEntries=expirations.map(exp=>({id:uid(),libraryId:matchedItem.id,locationId:selectedLocation,expiration:exp||'NA',status:'active',addedAt:new Date().toISOString(),lot:scanResult?.lot||'',barcode:scanResult?.barcode||''}));if(matchedItem&&vendor!==(matchedItem.vendor||'')){await onSaveLibrary(library.map(d=>d.id===matchedItem.id?{...d,vendor}:d));}if(onAppendStock){await onAppendStock(newEntries);}else{onSaveStock([...stock,...newEntries]);}setSessionCount(c=>c+parseInt(count));setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);setVendor('');}
-  function reset(){setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);setVendor('');}
+  function reset(){setPhase('camera');setScanResult(null);setMatchedItem(null);setCapturedPhoto(null);setCount('');setExpirations([]);setVendor('');setCountMode('each');setBoxSize('');}
 
   if(phase==='camera')return(
     <div>
@@ -1900,7 +1858,7 @@ function QuickReceiveView({ library, stock, locations, categories, navigate, onS
     </div>
   );
 
-  if(phase==='count')return(<div><TopBar title={matchedItem?.name} onBack={()=>setPhase('location')}/><div style={{padding:'0 20px'}}><div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:16,fontSize:13,color:'var(--color-text-secondary)',textAlign:'center'}}>→ {locations.find(l=>l.id===selectedLocation)?.name}<br/>How many units?</div><div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:12}}>{quick.map(n=><button key={n} onClick={()=>setCount(String(n))} style={{padding:'14px',borderRadius:'var(--radius-md)',border:count===String(n)?'none':'1px solid var(--color-border)',background:count===String(n)?'#1a1a1a':'var(--color-bg-secondary)',color:count===String(n)?'#fff':'var(--color-text)',fontWeight:700,fontSize:18,cursor:'pointer',fontFamily:'var(--font)'}}>{n}</button>)}</div><input value={count} onChange={e=>setCount(e.target.value)} type="number" min="1" placeholder="Other amount" style={{textAlign:'center',fontWeight:600,fontSize:16,marginBottom:16}}/><button onClick={handleCountNext} disabled={!parseInt(count)||parseInt(count)<1} style={{...btnG,width:'100%',opacity:parseInt(count)>0?1:0.45}}>Next → expiration dates</button></div></div>);
+  if(phase==='count'){const unitCount=countMode==='box'?(parseInt(count)||0)*(parseInt(boxSize)||1):countMode==='pct'?(parseInt(count)>0?1:0):(parseInt(count)||0);return(<div><TopBar title={matchedItem?.name} onBack={()=>setPhase('location')}/><div style={{padding:'0 20px'}}><div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:16,fontSize:13,color:'var(--color-text-secondary)',textAlign:'center'}}>→ {locations.find(l=>l.id===selectedLocation)?.name}<br/>How many?</div><div style={{display:'flex',gap:6,marginBottom:16}}>{[['each','Each'],['box','Boxes'],['pct','%']].map(([m,label])=><button key={m} onClick={()=>{setCountMode(m);setCount('');setBoxSize('');}} style={{flex:1,padding:'10px',borderRadius:'var(--radius-md)',border:'none',background:countMode===m?'#1a1a1a':'var(--color-bg-secondary)',color:countMode===m?'#fff':'var(--color-text)',fontWeight:countMode===m?700:400,fontSize:14,cursor:'pointer',fontFamily:'var(--font)'}}>{label}</button>)}</div>{countMode==='each'&&<><div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:12}}>{quick.map(n=><button key={n} onClick={()=>setCount(String(n))} style={{padding:'14px',borderRadius:'var(--radius-md)',border:count===String(n)?'none':'1px solid var(--color-border)',background:count===String(n)?'#1a1a1a':'var(--color-bg-secondary)',color:count===String(n)?'#fff':'var(--color-text)',fontWeight:700,fontSize:18,cursor:'pointer',fontFamily:'var(--font)'}}>{n}</button>)}</div><input value={count} onChange={e=>setCount(e.target.value)} type="number" min="1" placeholder="Other amount" style={{textAlign:'center',fontWeight:600,fontSize:16,marginBottom:16}}/></>}{countMode==='box'&&<div style={{marginBottom:16}}><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}><div><div style={{fontSize:12,color:'var(--color-text-secondary)',marginBottom:6}}>Boxes</div><input value={count} onChange={e=>setCount(e.target.value)} type="number" min="1" placeholder="e.g. 3" style={{textAlign:'center',fontWeight:600,fontSize:18}}/></div><div><div style={{fontSize:12,color:'var(--color-text-secondary)',marginBottom:6}}>Units per box</div><input value={boxSize} onChange={e=>setBoxSize(e.target.value)} type="number" min="1" placeholder="e.g. 10" style={{textAlign:'center',fontWeight:600,fontSize:18}}/></div></div>{unitCount>0&&<div style={{textAlign:'center',fontSize:15,fontWeight:700,color:'var(--color-success-text)',padding:'10px',background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)'}}>= {unitCount} units</div>}</div>}{countMode==='pct'&&<div style={{marginBottom:16}}><div style={{fontSize:12,color:'var(--color-text-secondary)',marginBottom:6,textAlign:'center'}}>% remaining in container</div><input value={count} onChange={e=>setCount(e.target.value)} type="number" min="0" max="100" placeholder="e.g. 75" style={{textAlign:'center',fontWeight:600,fontSize:24,marginBottom:10}}/><div style={{textAlign:'center',fontSize:12,color:'var(--color-text-secondary)'}}>{parseInt(count)>0?'= 1 unit in inventory':'Enter a percentage'}</div></div>}<button onClick={handleCountNext} disabled={!unitCount} style={{...btnG,width:'100%',opacity:unitCount>0?1:0.45}}>Next → {unitCount>0?`${unitCount} unit${unitCount!==1?'s':''}`:' expiration dates'}</button></div></div>);}
 
   if(phase==='expirations')return(<div><TopBar title={matchedItem?.name} onBack={()=>setPhase('count')}/><div style={{padding:'0 20px'}}><div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:16,fontSize:13,color:'var(--color-text-secondary)',textAlign:'center'}}>{expirations.length} unit{expirations.length!==1?'s':''} → {locations.find(l=>l.id===selectedLocation)?.name}<br/>Confirm expiration — tap N/A if none</div>{expirations.map((exp,i)=><div key={i} style={{marginBottom:16}}><ExpirationInput label={`Unit ${i+1} of ${expirations.length}`} value={exp} onChange={v=>{const next=[...expirations];next[i]=v;setExpirations(next);}}/></div>)}<button onClick={handleSave} style={{...btnG,width:'100%',marginTop:8}}>✓ Confirm — save {expirations.length} unit{expirations.length!==1?'s':''}</button></div></div>);
 
