@@ -1046,16 +1046,30 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
     return [...new Set([...stockLocs, ...extras])];
   }
 
-  function setCount(libraryId, locationId, value) {
-    setCounts(prev => ({ ...prev, [libraryId]: { ...(prev[libraryId] || {}), [locationId]: value } }));
+  // entry shape: { mode: 'each'|'box'|'pct', val: string, boxSize: string }
+  function setCountField(libraryId, locationId, field, value) {
+    setCounts(prev => ({
+      ...prev,
+      [libraryId]: {
+        ...(prev[libraryId] || {}),
+        [locationId]: { mode: 'each', boxSize: '', val: '', ...(prev[libraryId]?.[locationId] || {}), [field]: value }
+      }
+    }));
+  }
+
+  function entryTotal(entry) {
+    if (!entry || entry.val === '') return null;
+    if (entry.mode === 'box') return (parseInt(entry.val) || 0) * (parseInt(entry.boxSize) || 1);
+    if (entry.mode === 'pct') return (parseInt(entry.val) || 0) > 0 ? 1 : 0;
+    return parseInt(entry.val) || 0;
   }
 
   function getItemTotal(libraryId) {
-    return Object.values(counts[libraryId] || {}).reduce((s, v) => s + (parseInt(v) || 0), 0);
+    return Object.values(counts[libraryId] || {}).reduce((s, e) => s + (entryTotal(e) ?? 0), 0);
   }
 
   function itemHasCount(libraryId) {
-    return Object.values(counts[libraryId] || {}).some(v => v !== '');
+    return Object.values(counts[libraryId] || {}).some(e => e && e.val !== '');
   }
 
   function addExtraLoc(libraryId, locationId) {
@@ -1092,8 +1106,10 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
         locRows.forEach((locId, idx) => {
           const loc = locations.find(l => l.id === locId);
           const sysAtLoc = active.filter(s => s.libraryId === item.id && s.locationId === locId).length;
-          const raw = (counts[item.id] || {})[locId];
-          const physical = raw !== undefined && raw !== '' ? parseInt(raw) : '';
+          const entry = (counts[item.id] || {})[locId];
+          const tot = entryTotal(entry);
+          const physical = tot !== null ? tot : '';
+          const modeLabel = !entry ? '' : entry.mode === 'box' ? `${entry.val || 0} boxes × ${entry.boxSize || 1}` : entry.mode === 'pct' ? `${entry.val || 0}%` : '';
           const status = idx === 0 ? (!itemHasCount(item.id) ? 'NOT COUNTED' : par > 0 && itemTotal < par ? 'BELOW PAR' : itemTotal === 0 ? 'EMPTY' : 'OK') : '';
           rows.push([item.name, cat?.name || '', item.vendor || '', loc?.name || locId, physical, sysAtLoc, idx === 0 ? (item.sfotPar || 0) : '', idx === 0 ? (item.hhaPar || 0) : '', idx === 0 ? (par || '') : '', idx === 0 ? (itemHasCount(item.id) ? itemTotal : '') : '', status]);
         });
@@ -1110,9 +1126,9 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
     let added = 0, removed = 0, itemsAffected = 0;
     Object.entries(counts).forEach(([libraryId, locCounts]) => {
       let changed = false;
-      Object.entries(locCounts).forEach(([locationId, rawVal]) => {
-        if (rawVal === '' || rawVal === undefined) return;
-        const n = parseInt(rawVal) || 0;
+      Object.entries(locCounts).forEach(([locationId, entry]) => {
+        if (!entry || entry.val === '') return;
+        const n = entryTotal(entry) ?? 0;
         const cur = active.filter(s => s.libraryId === libraryId && s.locationId === locationId).length;
         const diff = n - cur;
         if (diff > 0) { added += diff; changed = true; }
@@ -1128,9 +1144,9 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
     setApplying(true);
     let newStock = [...stock];
     Object.entries(counts).forEach(([libraryId, locCounts]) => {
-      Object.entries(locCounts).forEach(([locationId, rawVal]) => {
-        if (rawVal === '' || rawVal === undefined) return;
-        const newCount = parseInt(rawVal) || 0;
+      Object.entries(locCounts).forEach(([locationId, entry]) => {
+        if (!entry || entry.val === '') return;
+        const newCount = entryTotal(entry) ?? 0;
         const current = newStock.filter(s => s.status === 'active' && s.libraryId === libraryId && s.locationId === locationId);
         const diff = newCount - current.length;
         if (diff < 0) {
@@ -1215,20 +1231,45 @@ function TakeInventoryView({ library, stock, categories, locations, navigate, on
                   {locRows.map((locId, i) => {
                     const loc = locations.find(l => l.id === locId);
                     const sysAtLoc = active.filter(s => s.libraryId === item.id && s.locationId === locId).length;
-                    const val = (counts[item.id] || {})[locId] ?? '';
+                    const entry = (counts[item.id] || {})[locId] || { mode: 'each', val: '', boxSize: '' };
+                    const mode = entry.mode || 'each';
+                    const locTotal = entryTotal(entry);
                     return (
-                      <div key={locId} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--color-bg-secondary)', borderTop: i > 0 ? '1px solid var(--color-border)' : 'none' }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: 13 }}>{loc?.icon} {loc?.name || locId}</div>
-                          <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>System: {sysAtLoc} unit{sysAtLoc !== 1 ? 's' : ''}</div>
+                      <div key={locId} style={{ padding: '10px 14px', background: 'var(--color-bg-secondary)', borderTop: i > 0 ? '1px solid var(--color-border)' : 'none' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: 13 }}>{loc?.icon} {loc?.name || locId}</div>
+                            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>System: {sysAtLoc} unit{sysAtLoc !== 1 ? 's' : ''}{locTotal !== null ? ` · Counted: ${locTotal}` : ''}</div>
+                          </div>
+                          <select value={mode} onChange={e => { e.stopPropagation(); setCountField(item.id, locId, 'mode', e.target.value); }} onClick={e => e.stopPropagation()} style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid var(--color-border)', background: 'var(--color-bg)', color: 'var(--color-text)', fontSize: 12, fontFamily: 'var(--font)', cursor: 'pointer' }}>
+                            <option value="each">Each</option>
+                            <option value="box">Boxes</option>
+                            <option value="pct">%</option>
+                          </select>
                         </div>
-                        <input
-                          type="number" min="0" inputMode="numeric" placeholder="0"
-                          value={val}
-                          onChange={e => setCount(item.id, locId, e.target.value)}
-                          onClick={e => e.stopPropagation()}
-                          style={{ width: 64, textAlign: 'center', fontWeight: 700, fontSize: 18, padding: '6px 4px', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font)' }}
-                        />
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }} onClick={e => e.stopPropagation()}>
+                          {mode === 'each' && (
+                            <input type="number" min="0" inputMode="numeric" placeholder="0" value={entry.val}
+                              onChange={e => setCountField(item.id, locId, 'val', e.target.value)}
+                              style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 18, padding: '7px 4px', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font)' }} />
+                          )}
+                          {mode === 'box' && (<>
+                            <input type="number" min="0" inputMode="numeric" placeholder="0 boxes" value={entry.val}
+                              onChange={e => setCountField(item.id, locId, 'val', e.target.value)}
+                              style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 16, padding: '7px 4px', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font)' }} />
+                            <span style={{ color: 'var(--color-text-tertiary)', fontSize: 13, flexShrink: 0 }}>×</span>
+                            <input type="number" min="1" inputMode="numeric" placeholder="qty/box" value={entry.boxSize}
+                              onChange={e => setCountField(item.id, locId, 'boxSize', e.target.value)}
+                              style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 16, padding: '7px 4px', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font)' }} />
+                            {entry.val && entry.boxSize && <span style={{ color: 'var(--color-success-text)', fontSize: 12, fontWeight: 600, flexShrink: 0 }}>= {(parseInt(entry.val)||0)*(parseInt(entry.boxSize)||1)}</span>}
+                          </>)}
+                          {mode === 'pct' && (<>
+                            <input type="number" min="0" max="100" inputMode="numeric" placeholder="0" value={entry.val}
+                              onChange={e => setCountField(item.id, locId, 'val', e.target.value)}
+                              style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 18, padding: '7px 4px', border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font)' }} />
+                            <span style={{ color: 'var(--color-text-secondary)', fontSize: 16, fontWeight: 600 }}>%</span>
+                          </>)}
+                        </div>
                       </div>
                     );
                   })}
