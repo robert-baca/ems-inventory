@@ -1017,7 +1017,7 @@ function MapView({ locations, library, stock, categories, mapData, navigate, onS
   );
 }
 
-function TakeInventoryView({ library, stock, categories, locations, navigate }) {
+function TakeInventoryView({ library, stock, categories, locations, navigate, onSaveStock }) {
   // counts: { [libraryId]: { [locationId]: string } }
   const [counts, setCounts] = useState({});
   // extraLocs: { [libraryId]: locationId[] } — locations added manually
@@ -1025,6 +1025,8 @@ function TakeInventoryView({ library, stock, categories, locations, navigate }) 
   const [expanded, setExpanded] = useState({});
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState('all');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [applying, setApplying] = useState(false);
 
   const active = stock.filter(s => s.status === 'active');
   const q = search.trim().toLowerCase();
@@ -1091,6 +1093,57 @@ function TakeInventoryView({ library, stock, categories, locations, navigate }) 
     a.download = `inventory-count-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
   }
+
+  function getChangeSummary() {
+    let added = 0, removed = 0, itemsAffected = 0;
+    Object.entries(counts).forEach(([libraryId, locCounts]) => {
+      let changed = false;
+      Object.entries(locCounts).forEach(([locationId, rawVal]) => {
+        if (rawVal === '' || rawVal === undefined) return;
+        const n = parseInt(rawVal) || 0;
+        const cur = active.filter(s => s.libraryId === libraryId && s.locationId === locationId).length;
+        const diff = n - cur;
+        if (diff > 0) { added += diff; changed = true; }
+        if (diff < 0) { removed += Math.abs(diff); changed = true; }
+        if (diff === 0 && n >= 0) changed = true;
+      });
+      if (changed) itemsAffected++;
+    });
+    return { added, removed, itemsAffected };
+  }
+
+  function applyInventory() {
+    setApplying(true);
+    let newStock = [...stock];
+    Object.entries(counts).forEach(([libraryId, locCounts]) => {
+      Object.entries(locCounts).forEach(([locationId, rawVal]) => {
+        if (rawVal === '' || rawVal === undefined) return;
+        const newCount = parseInt(rawVal) || 0;
+        const current = newStock.filter(s => s.status === 'active' && s.libraryId === libraryId && s.locationId === locationId);
+        const diff = newCount - current.length;
+        if (diff < 0) {
+          // Pull excess — remove NA/expired first, keep best-dated
+          const sorted = [...current].sort((a, b) => {
+            const da = parseExp(a.expiration), db = parseExp(b.expiration);
+            if (!da && !db) return 0; if (!da) return -1; if (!db) return 1;
+            return db - da;
+          });
+          const pullIds = new Set(sorted.slice(0, Math.abs(diff)).map(s => s.id));
+          newStock = newStock.map(s => pullIds.has(s.id) ? { ...s, status: 'pulled', pulledAt: new Date().toISOString() } : s);
+        } else if (diff > 0) {
+          for (let i = 0; i < diff; i++) {
+            newStock.push({ id: uid(), libraryId, locationId, expiration: 'NA', status: 'active', addedAt: new Date().toISOString(), lot: '' });
+          }
+        }
+      });
+    });
+    onSaveStock(newStock);
+    setApplying(false);
+    setConfirmOpen(false);
+    navigate(-1);
+  }
+
+  const summary = getChangeSummary();
 
   return (
     <div style={{ paddingBottom: 20 }}>
@@ -1182,7 +1235,45 @@ function TakeInventoryView({ library, stock, categories, locations, navigate }) 
           );
         })}
         {items.length === 0 && <EmptyState icon="📋" title="No items" subtitle={q ? `No results for "${q}"` : 'No active items'} />}
+
+        {countedCount > 0 && (
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--color-border)' }}>
+            <button onClick={() => setConfirmOpen(true)} style={{ ...btnP, width: '100%', fontSize: 15, padding: '14px' }}>
+              Submit & Replace Inventory
+            </button>
+            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'center', marginTop: 6 }}>
+              {summary.itemsAffected} item{summary.itemsAffected !== 1 ? 's' : ''} affected · {summary.added > 0 ? `+${summary.added} added` : ''}{summary.added > 0 && summary.removed > 0 ? ', ' : ''}{summary.removed > 0 ? `${summary.removed} removed` : ''}
+            </div>
+          </div>
+        )}
       </div>
+
+      {confirmOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: 24 }}>
+          <div style={{ background: 'var(--color-bg)', borderRadius: 'var(--radius-lg)', padding: '24px 20px', width: '100%', maxWidth: 380 }}>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Replace current inventory?</div>
+            <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 16, lineHeight: 1.5 }}>
+              This will update stock to match your physical counts. Items you did <strong>not</strong> count will not be changed.
+            </div>
+            <div style={{ background: 'var(--color-bg-secondary)', borderRadius: 'var(--radius-md)', padding: '12px 16px', marginBottom: 20, fontSize: 13 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span>Items updated</span><strong>{summary.itemsAffected}</strong>
+              </div>
+              {summary.added > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, color: 'var(--color-success-text)' }}>
+                <span>Units added</span><strong>+{summary.added}</strong>
+              </div>}
+              {summary.removed > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--color-danger-text)' }}>
+                <span>Units removed</span><strong>-{summary.removed}</strong>
+              </div>}
+              {summary.added === 0 && summary.removed === 0 && <div style={{ color: 'var(--color-text-tertiary)' }}>No changes — counts match current stock</div>}
+            </div>
+            <button onClick={applyInventory} disabled={applying} style={{ ...btnP, width: '100%', marginBottom: 10, opacity: applying ? 0.5 : 1 }}>
+              {applying ? 'Applying...' : 'Yes, replace inventory'}
+            </button>
+            <button onClick={() => setConfirmOpen(false)} style={{ ...btnS, width: '100%' }}>Cancel</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2474,7 +2565,7 @@ export default function App() {
       {view==='map'            &&<MapView {...sharedProps} mapData={mapData} onSaveMap={saveMap} onSaveLocations={saveLocations}/>}
       {view==='locationdetail' &&<LocationDetailView {...sharedProps} locationId={params.locationId} onSaveStock={saveStock}/>}
       {view==='inventory'      &&<InventoryView {...sharedProps} onSaveCategories={saveCategories} onSaveStock={saveStock}/>}
-      {view==='takeinventory'  &&<TakeInventoryView {...sharedProps}/>}
+      {view==='takeinventory'  &&<TakeInventoryView {...sharedProps} onSaveStock={saveStock}/>}
       {view==='library'        &&<LibraryView {...sharedProps}/>}
       {view==='vendorlist'     &&<VendorListView {...sharedProps} onSaveLibrary={saveLibrary}/>}
       {view==='drugdetail'     &&<DrugDetailView {...sharedProps} libraryId={params.libraryId} onSaveStock={saveStock} onSaveLibrary={saveLibrary}/>}
