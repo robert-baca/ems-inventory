@@ -1400,10 +1400,16 @@ function AddStockView({ libraryId, locationId, library, stock, locations, naviga
 function LibraryView({ library, stock, categories, navigate, pending }) {
   const [search,setSearch]=useState('');
   const [showInactive,setShowInactive]=useState(false);
+  const [filterNoStock,setFilterNoStock]=useState(false);
   const active=stock.filter(s=>s.status==='active');
   const q=search.trim().toLowerCase();
-  const visible=library.filter(d=>showInactive||d.status!=='inactive').filter(d=>!q||d.name.toLowerCase().includes(q)).sort((a,b)=>{const order=['expired','soon','watch','none','good'];const wa=worstStatus(active.filter(s=>s.libraryId===a.id));const wb=worstStatus(active.filter(s=>s.libraryId===b.id));if(wa!==wb)return order.indexOf(wa)-order.indexOf(wb);return a.name.localeCompare(b.name);});
+  const visible=library
+    .filter(d=>showInactive||d.status!=='inactive')
+    .filter(d=>!q||d.name.toLowerCase().includes(q))
+    .filter(d=>!filterNoStock||active.filter(s=>s.libraryId===d.id).length===0)
+    .sort((a,b)=>{const order=['expired','soon','watch','none','good'];const wa=worstStatus(active.filter(s=>s.libraryId===a.id));const wb=worstStatus(active.filter(s=>s.libraryId===b.id));if(wa!==wb)return order.indexOf(wa)-order.indexOf(wb);return a.name.localeCompare(b.name);});
   const inactiveCount=library.filter(d=>d.status==='inactive').length;
+  const noStockCount=library.filter(d=>d.status!=='inactive'&&active.filter(s=>s.libraryId===d.id).length===0).length;
   const pendingCount=(pending||[]).filter(p=>p.status==='pending').length;
   return(
     <div style={{paddingBottom:20}}>
@@ -1429,6 +1435,13 @@ function LibraryView({ library, stock, categories, navigate, pending }) {
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{paddingLeft:30,paddingRight:search?30:10}}/>
           {search&&<button onClick={()=>setSearch('')} style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--color-text-tertiary)',fontSize:18,lineHeight:1,padding:0}}>×</button>}
         </div>
+        {noStockCount>0&&(
+          <div style={{display:'flex',gap:6,marginBottom:12}}>
+            <button onClick={()=>setFilterNoStock(f=>!f)} style={{padding:'5px 12px',borderRadius:20,border:filterNoStock?'none':'1px solid var(--color-border)',background:filterNoStock?'#1a1a1a':'var(--color-bg-secondary)',color:filterNoStock?'#fff':'var(--color-text-secondary)',fontSize:12,fontWeight:filterNoStock?600:400,cursor:'pointer',fontFamily:'var(--font)'}}>
+              {filterNoStock?'✕ ':''}No stock{filterNoStock?'':` (${noStockCount})`}
+            </button>
+          </div>
+        )}
         {visible.map(item=>{
           const ds=active.filter(s=>s.libraryId===item.id);const worst=worstStatus(ds);const ws=SS[worst];const hasIssue=worst==='expired'||worst==='soon';
           const cat=categories.find(c=>c.id===item.category);const par=(item.sfotPar||0)+(item.hhaPar||0);const usable=ds.filter(s=>getStatus(s.expiration).type!=='expired').length;const belowPar=par>0&&usable<par;
@@ -1449,7 +1462,7 @@ function LibraryView({ library, stock, categories, navigate, pending }) {
           );
         })}
         {inactiveCount>0&&<button onClick={()=>setShowInactive(s=>!s)} style={{...btnS,width:'100%',marginTop:8,fontSize:13}}>{showInactive?'Hide':'Show'} {inactiveCount} inactive</button>}
-        {visible.length===0&&<EmptyState icon="📦" title="No items" subtitle="Scan an item to add it to your library" action={<button onClick={()=>navigate('additem')} style={{...btnG,padding:'10px 20px'}}>+ Add item</button>}/>}
+        {visible.length===0&&<EmptyState icon="📦" title={filterNoStock?'All items have stock':'No items'} subtitle={filterNoStock?'Every active item in your library has at least one unit':'Scan an item to add it to your library'} action={filterNoStock?<button onClick={()=>setFilterNoStock(false)} style={{...btnS,padding:'10px 20px'}}>Clear filter</button>:<button onClick={()=>navigate('additem')} style={{...btnG,padding:'10px 20px'}}>+ Add item</button>}/>}
       </div>
     </div>
   );
