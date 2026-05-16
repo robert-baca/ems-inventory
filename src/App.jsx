@@ -1255,10 +1255,12 @@ function DrugDetailView({ libraryId, library, stock, locations, categories, navi
             <div key={entry.id} style={{display:'flex',alignItems:'center',gap:12,padding:'13px 14px',background:'var(--color-bg)',border:`1px solid ${es.border}`,borderRadius:'var(--radius-lg)',marginBottom:8}}>
               <div style={{flex:1}}>
                 <div style={{fontSize:18,fontWeight:700,fontFamily:'var(--font-mono)',marginBottom:3}}>{entry.expiration==='NA'?'N/A':entry.expiration||'—'}</div>
-                <div style={{fontSize:12,color:'var(--color-text-secondary)',display:'flex',gap:8,flexWrap:'wrap'}}>
+                <div style={{fontSize:12,color:'var(--color-text-secondary)',display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
                   {loc&&<span>📍 {loc.name}</span>}
                   {entry.lot&&<span>Lot: {entry.lot}</span>}
                   <span>{new Date(entry.addedAt).toLocaleDateString()}</span>
+                  {entry.countMode==='box'&&<span style={{background:'#1e3a5f',color:'#93c5fd',border:'1px solid #3b82f6',borderRadius:4,padding:'1px 6px',fontSize:10,fontWeight:700,letterSpacing:0.5}}>📦 BOX{entry.itemsPerBox!=null?` · ${entry.itemsPerBox}/box`:' · N/A'}</span>}
+                  {entry.countMode==='percent'&&<span style={{background:'#1a3a2a',color:'#86efac',border:'1px solid #22c55e',borderRadius:4,padding:'1px 6px',fontSize:10,fontWeight:700,letterSpacing:0.5}}>{entry.percentFull??'?'}% FULL</span>}
                 </div>
                 {st.days!==null&&st.days<=90&&<div style={{fontSize:11,color:es.text,marginTop:4,fontWeight:500}}>{st.days<0?`Expired ${Math.abs(st.days)} days ago`:st.days===0?'Expires today':`Expires in ${st.days} days`}</div>}
               </div>
@@ -1305,14 +1307,93 @@ function AddStockView({ libraryId, locationId, library, stock, locations, naviga
   const [batchExp,setBatchExp]=useState('');
   const [saving,setSaving]=useState(false);
   const [search,setSearch]=useState('');
+  const [countMode,setCountMode]=useState('each');
+  const [itemsPerBox,setItemsPerBox]=useState('');
+  const [itemsPerBoxNA,setItemsPerBoxNA]=useState(false);
   const quick=[1,2,3,4,5,6,10,12];
+  const pctQuick=[25,50,75,100];
   const q=search.trim().toLowerCase();
-  function handleCountNext(){const n=parseInt(count);if(!n||n<1)return;setExpirations(Array(n).fill(''));setStep('expirations');}
-  function handleSave(){setSaving(true);const newEntries=expirations.map(exp=>({id:uid(),libraryId:selectedItem.id,locationId:selectedLocation,expiration:exp||'NA',status:'active',addedAt:new Date().toISOString(),lot:''}));onSaveStock([...stock,...newEntries]);setSaving(false);if(locationId)navigate('locationdetail',{locationId});else if(libraryId)navigate('drugdetail',{libraryId});else navigate('inventory');}
+  const locName=locations.find(l=>l.id===selectedLocation)?.name;
+
+  function handleCountNext(){
+    if(countMode==='percent'){const n=parseInt(count);if(!n||n<0)return;setExpirations(['']);setStep('expirations');return;}
+    const n=parseInt(count);if(!n||n<1)return;setExpirations(Array(n).fill(''));
+    if(countMode==='box'){setStep('boxdetails');}else{setStep('expirations');}
+  }
+  function handleSave(){
+    setSaving(true);
+    const newEntries=expirations.map(exp=>({id:uid(),libraryId:selectedItem.id,locationId:selectedLocation,expiration:exp||'NA',status:'active',addedAt:new Date().toISOString(),lot:'',
+      ...(countMode==='box'&&{countMode:'box',itemsPerBox:itemsPerBoxNA?null:parseInt(itemsPerBox)||null}),
+      ...(countMode==='percent'&&{countMode:'percent',percentFull:parseInt(count)||null}),
+    }));
+    onSaveStock([...stock,...newEntries]);setSaving(false);
+    if(locationId)navigate('locationdetail',{locationId});else if(libraryId)navigate('drugdetail',{libraryId});else navigate('inventory');
+  }
+
+  const modeBtn=(mode,label)=>(
+    <button key={mode} onClick={()=>{setCountMode(mode);setCount('');}} style={{flex:1,padding:'9px 8px',borderRadius:'var(--radius-md)',border:countMode===mode?'none':'1px solid var(--color-border)',background:countMode===mode?'#1a1a1a':'var(--color-bg-secondary)',color:countMode===mode?'#fff':'var(--color-text-secondary)',fontSize:13,fontWeight:countMode===mode?600:400,cursor:'pointer',fontFamily:'var(--font)'}}>{label}</button>
+  );
+
   if(step==='selectitem')return(<div><TopBar title="Add Stock" onBack={()=>navigate(-1)}/><div style={{padding:'0 20px'}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search library..." style={{marginBottom:12}}/>{library.filter(i=>i.status!=='inactive').filter(i=>!q||i.name.toLowerCase().includes(q)).map(item=><div key={item.id} onClick={()=>{setSelectedItem(item);setStep('location');}} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 14px',background:'var(--color-bg)',border:'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',marginBottom:8,cursor:'pointer'}}><span style={{fontSize:13,fontWeight:600}}>{item.name}</span></div>)}</div></div>);
   if(step==='location')return(<div><TopBar title={selectedItem?.name} onBack={()=>libraryId&&!locationId?navigate(-1):setStep('selectitem')}/><div style={{padding:'0 20px'}}><div style={{fontSize:13,color:'var(--color-text-secondary)',marginBottom:14}}>Where is this stock going?</div>{locations.map(loc=><div key={loc.id} onClick={()=>{setSelectedLocation(loc.id);setStep('count');}} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:selectedLocation===loc.id?'var(--color-bg-secondary)':'var(--color-bg)',border:selectedLocation===loc.id?'2px solid var(--color-border-strong)':'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',marginBottom:8,cursor:'pointer'}}><span style={{fontSize:20}}>{loc.icon}</span><span style={{fontWeight:600,fontSize:14}}>{loc.name}</span></div>)}</div></div>);
-  if(step==='count')return(<div><TopBar title={selectedItem?.name} onBack={()=>setStep('location')}/><div style={{padding:'0 20px'}}><div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:16,fontSize:13,color:'var(--color-text-secondary)',textAlign:'center'}}>→ {locations.find(l=>l.id===selectedLocation)?.name}<br/>How many units?</div><div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8,marginBottom:12}}>{quick.map(n=><button key={n} onClick={()=>setCount(String(n))} style={{padding:'13px 8px',borderRadius:'var(--radius-md)',border:count===String(n)?'none':'1px solid var(--color-border)',background:count===String(n)?'#1a1a1a':'var(--color-bg-secondary)',color:count===String(n)?'#fff':'var(--color-text)',fontWeight:700,fontSize:16,cursor:'pointer',fontFamily:'var(--font)'}}>{n}</button>)}</div><input value={count} onChange={e=>setCount(e.target.value)} type="number" min="1" placeholder="Other amount" style={{textAlign:'center',fontWeight:600,fontSize:16,marginBottom:16}}/><button onClick={handleCountNext} disabled={!parseInt(count)||parseInt(count)<1} style={{...btnG,width:'100%',opacity:parseInt(count)>0?1:0.45}}>Next → expiration dates</button></div></div>);
-  if(step==='expirations')return(<div><TopBar title={selectedItem?.name} onBack={()=>setStep('count')}/><div style={{padding:'0 20px'}}><div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:16,fontSize:13,color:'var(--color-text-secondary)',textAlign:'center'}}>{expirations.length} unit{expirations.length!==1?'s':''} → {locations.find(l=>l.id===selectedLocation)?.name}<br/>Enter expiration — tap N/A if none</div><div style={{background:'var(--color-bg)',border:'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',padding:'14px',marginBottom:20}}><div style={{fontSize:12,fontWeight:700,color:'var(--color-text-secondary)',marginBottom:10}}>APPLY SAME DATE TO ALL</div><ExpirationInput value={batchExp} onChange={setBatchExp}/><button onClick={()=>{if(batchExp)setExpirations(expirations.map(()=>batchExp));}} disabled={!batchExp} style={{...btnG,width:'100%',marginTop:10,opacity:batchExp?1:0.4}}>Apply to all {expirations.length} units</button></div>{expirations.map((exp,i)=><div key={i} style={{marginBottom:16}}><ExpirationInput label={`Unit ${i+1} of ${expirations.length}`} value={exp} onChange={v=>{const next=[...expirations];next[i]=v;setExpirations(next);}}/></div>)}<button onClick={handleSave} disabled={saving} style={{...btnG,width:'100%',marginTop:8,opacity:saving?0.5:1}}>{saving?'Saving...':`✓ Save ${expirations.length} unit${expirations.length!==1?'s':''}`}</button></div></div>);
+
+  if(step==='count')return(
+    <div><TopBar title={selectedItem?.name} onBack={()=>setStep('location')}/>
+    <div style={{padding:'0 20px'}}>
+      <div style={{display:'flex',gap:6,marginBottom:14}}>{modeBtn('each','Each')}{modeBtn('box','📦 Box')}{modeBtn('percent','%')}</div>
+      <div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:16,fontSize:13,color:'var(--color-text-secondary)',textAlign:'center'}}>
+        → {locName}<br/>{countMode==='percent'?'How full? (0–100%)':countMode==='box'?'How many boxes?':'How many units?'}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8,marginBottom:12}}>
+        {(countMode==='percent'?pctQuick:quick).map(n=><button key={n} onClick={()=>setCount(String(n))} style={{padding:'13px 8px',borderRadius:'var(--radius-md)',border:count===String(n)?'none':'1px solid var(--color-border)',background:count===String(n)?'#1a1a1a':'var(--color-bg-secondary)',color:count===String(n)?'#fff':'var(--color-text)',fontWeight:700,fontSize:16,cursor:'pointer',fontFamily:'var(--font)'}}>{n}{countMode==='percent'?'%':''}</button>)}
+      </div>
+      <div style={{position:'relative',marginBottom:16}}>
+        <input value={count} onChange={e=>setCount(e.target.value)} type="number" min="0" max={countMode==='percent'?100:undefined} placeholder={countMode==='percent'?'Enter %':'Other amount'} style={{textAlign:'center',fontWeight:600,fontSize:16,paddingRight:countMode==='percent'?36:undefined}}/>
+        {countMode==='percent'&&<span style={{position:'absolute',right:14,top:'50%',transform:'translateY(-50%)',fontSize:16,fontWeight:700,color:'var(--color-text-secondary)',pointerEvents:'none'}}>%</span>}
+      </div>
+      <button onClick={handleCountNext} disabled={!parseInt(count)||(countMode!=='percent'&&parseInt(count)<1)} style={{...btnG,width:'100%',opacity:parseInt(count)>=0?1:0.45}}>
+        {countMode==='box'?'Next → items per box':'Next → expiration date'+(countMode==='percent'?'':'s')}
+      </button>
+    </div></div>
+  );
+
+  if(step==='boxdetails')return(
+    <div><TopBar title={selectedItem?.name} onBack={()=>setStep('count')}/>
+    <div style={{padding:'0 20px'}}>
+      <div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:16,fontSize:13,color:'var(--color-text-secondary)',textAlign:'center'}}>
+        {parseInt(count)} box{parseInt(count)!==1?'es':''} → {locName}<br/>How many items per box?
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8,marginBottom:12}}>
+        {[10,12,25,50,100].map(n=><button key={n} onClick={()=>{setItemsPerBox(String(n));setItemsPerBoxNA(false);}} style={{padding:'13px 8px',borderRadius:'var(--radius-md)',border:(itemsPerBox===String(n)&&!itemsPerBoxNA)?'none':'1px solid var(--color-border)',background:(itemsPerBox===String(n)&&!itemsPerBoxNA)?'#1a1a1a':'var(--color-bg-secondary)',color:(itemsPerBox===String(n)&&!itemsPerBoxNA)?'#fff':'var(--color-text)',fontWeight:700,fontSize:16,cursor:'pointer',fontFamily:'var(--font)'}}>{n}</button>)}
+      </div>
+      <input value={itemsPerBoxNA?'':itemsPerBox} onChange={e=>{setItemsPerBox(e.target.value);setItemsPerBoxNA(false);}} type="number" min="1" placeholder="Custom amount" style={{textAlign:'center',fontWeight:600,fontSize:16,marginBottom:10}}/>
+      <button onClick={()=>{setItemsPerBoxNA(true);setItemsPerBox('');}} style={{width:'100%',padding:'11px',borderRadius:'var(--radius-md)',border:itemsPerBoxNA?'none':'1px solid var(--color-border)',background:itemsPerBoxNA?'#1a1a1a':'var(--color-bg-secondary)',color:itemsPerBoxNA?'#fff':'var(--color-text-secondary)',fontSize:13,fontWeight:itemsPerBoxNA?600:400,cursor:'pointer',fontFamily:'var(--font)',marginBottom:16}}>
+        N/A — item count unknown
+      </button>
+      <button onClick={()=>setStep('expirations')} disabled={!itemsPerBoxNA&&!parseInt(itemsPerBox)} style={{...btnG,width:'100%',opacity:(itemsPerBoxNA||parseInt(itemsPerBox))?1:0.45}}>
+        Next → expiration date{parseInt(count)!==1?'s':''}
+      </button>
+    </div></div>
+  );
+
+  if(step==='expirations'){
+    const unitLabel=countMode==='box'?'Box':'Unit';
+    const totalLabel=countMode==='percent'?'Container':countMode==='box'?`${expirations.length} box${expirations.length!==1?'es':''}`:expirations.length+' unit'+(expirations.length!==1?'s':'');
+    const saveLabel=countMode==='percent'?'✓ Save container':countMode==='box'?`✓ Save ${expirations.length} box${expirations.length!==1?'es':''}`:(`✓ Save ${expirations.length} unit${expirations.length!==1?'s':''}`);
+    return(
+      <div><TopBar title={selectedItem?.name} onBack={()=>countMode==='box'?setStep('boxdetails'):setStep('count')}/>
+      <div style={{padding:'0 20px'}}>
+        <div style={{background:'var(--color-bg-secondary)',borderRadius:'var(--radius-md)',padding:'10px 14px',marginBottom:16,fontSize:13,color:'var(--color-text-secondary)',textAlign:'center'}}>{totalLabel} → {locName}<br/>Enter expiration — tap N/A if none</div>
+        {expirations.length>1&&<div style={{background:'var(--color-bg)',border:'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',padding:'14px',marginBottom:20}}>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--color-text-secondary)',marginBottom:10}}>APPLY SAME DATE TO ALL</div>
+          <ExpirationInput value={batchExp} onChange={setBatchExp}/>
+          <button onClick={()=>{if(batchExp)setExpirations(expirations.map(()=>batchExp));}} disabled={!batchExp} style={{...btnG,width:'100%',marginTop:10,opacity:batchExp?1:0.4}}>Apply to all {expirations.length} {countMode==='box'?'boxes':'units'}</button>
+        </div>}
+        {expirations.map((exp,i)=><div key={i} style={{marginBottom:16}}><ExpirationInput label={countMode==='percent'?'Container expiration':`${unitLabel} ${i+1} of ${expirations.length}`} value={exp} onChange={v=>{const next=[...expirations];next[i]=v;setExpirations(next);}}/></div>)}
+        <button onClick={handleSave} disabled={saving} style={{...btnG,width:'100%',marginTop:8,opacity:saving?0.5:1}}>{saving?'Saving...':saveLabel}</button>
+      </div></div>
+    );
+  }
   return null;
 }
 
