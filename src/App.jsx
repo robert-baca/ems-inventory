@@ -1374,7 +1374,7 @@ function LibraryView({ library, stock, categories, navigate, pending }) {
   );
 }
 
-function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locations, categories, navigate, onSaveLibrary, onSaveStock }) {
+function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locations, categories, spreadsheet, navigate, onSaveLibrary, onSaveStock }) {
   const existing=libraryId?library.find(d=>d.id===libraryId):null;
   const fileRef=useRef(null);
   const [form,setForm]=useState({name:existing?.name||scanData?.name||'',category:existing?.category||scanData?.category||categories[0]?.id||'',packagingType:existing?.packagingType||scanData?.packagingType||'vial',unit:existing?.unit||scanData?.unit||'',size:existing?.size||scanData?.size||'',notes:existing?.notes||scanData?.notes||'',sfotPar:existing?.sfotPar??'',hhaPar:existing?.hhaPar??'',status:existing?.status||'active',vendor:existing?.vendor||''});
@@ -1385,6 +1385,9 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
   const [scanned,setScanned]=useState(!!(scanData&&Object.values(scanData).some(v=>v)));
   const [saving,setSaving]=useState(false);
   const [addStockPrompt,setAddStockPrompt]=useState(null);
+  const [spreadsheetMatch,setSpreadsheetMatch]=useState(null);
+  const [showSheet,setShowSheet]=useState(false);
+  const [sheetSearch,setSheetSearch]=useState('');
   const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
   const isEdit=!!existing;
 
@@ -1411,7 +1414,7 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
   setCapturedPhotos(photos);
   setScanning(true); setScanError(null);
   try {
-    const result = await api.scan(photos);
+    const result = await api.scan(photos, spreadsheet);
     setForm(f => ({
       ...f,
       name:          result.name          || f.name,
@@ -1420,7 +1423,10 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
       unit:          result.unit          || f.unit,
       size:          result.size          || f.size,
       notes:         result.notes         || f.notes,
+      sfotPar:       result.sfotPar != null ? String(result.sfotPar) : f.sfotPar,
+      hhaPar:        result.hhaPar  != null ? String(result.hhaPar)  : f.hhaPar,
     }));
+    if (result.spreadsheetMatch) setSpreadsheetMatch(result.spreadsheetMatch);
     if (!photo && photos[0]) setPhoto(await resizeImage(photos[0], 400));
     setCapturedPhotos([]);
     setScanned(true);
@@ -1437,10 +1443,38 @@ function AddItemView({ libraryId, scanData, capturedPhoto, library, stock, locat
             {scanError&&<div style={{fontSize:12,color:'var(--color-danger-text)',marginTop:8,textAlign:'center'}}>{scanError}</div>}
           </div>
         )}
-        {scanned&&<div style={{background:'var(--color-success-bg)',color:'var(--color-success-text)',border:'1px solid var(--color-success-border)',padding:'10px 14px',borderRadius:'var(--radius-md)',marginBottom:16,fontSize:13,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        {scanned&&<div style={{background:'var(--color-success-bg)',color:'var(--color-success-text)',border:'1px solid var(--color-success-border)',padding:'10px 14px',borderRadius:'var(--radius-md)',marginBottom:spreadsheetMatch?0:16,fontSize:13,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
           <span>✓ Scanned — review below</span>
-          <button onClick={()=>{setScanned(false);setForm(f=>({...f,name:'',packagingType:'vial',unit:'',size:'',notes:''}));}} style={{background:'none',border:'none',cursor:'pointer',color:'var(--color-success-text)',fontSize:12,fontFamily:'var(--font)',textDecoration:'underline'}}>Rescan</button>
+          <button onClick={()=>{setScanned(false);setSpreadsheetMatch(null);setForm(f=>({...f,name:'',packagingType:'vial',unit:'',size:'',notes:'',sfotPar:'',hhaPar:''}));}} style={{background:'none',border:'none',cursor:'pointer',color:'var(--color-success-text)',fontSize:12,fontFamily:'var(--font)',textDecoration:'underline'}}>Rescan</button>
         </div>}
+        {spreadsheetMatch&&<div style={{background:'#eff6ff',color:'#1d4ed8',border:'1px solid #bfdbfe',padding:'8px 14px',borderRadius:'0 0 var(--radius-md) var(--radius-md)',marginBottom:16,fontSize:12}}>📋 Matched spreadsheet: <strong>{spreadsheetMatch}</strong></div>}
+        {!isEdit&&spreadsheet?.length>0&&(
+          <div style={{marginBottom:16,border:'1px solid var(--color-border)',borderRadius:'var(--radius-lg)',overflow:'hidden'}}>
+            <button onClick={()=>setShowSheet(s=>!s)} style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 14px',background:'var(--color-bg-secondary)',border:'none',cursor:'pointer',fontFamily:'var(--font)',fontSize:13,fontWeight:600,color:'var(--color-text)'}}>
+              <span>📋 PAR reference ({spreadsheet.length} items)</span>
+              <span style={{color:'var(--color-text-tertiary)',fontSize:16}}>{showSheet?'▲':'▼'}</span>
+            </button>
+            {showSheet&&(
+              <div>
+                <div style={{padding:'8px 10px',borderTop:'1px solid var(--color-border)',background:'var(--color-bg)'}}>
+                  <input value={sheetSearch} onChange={e=>setSheetSearch(e.target.value)} placeholder="Search spreadsheet..." style={{fontSize:12,padding:'6px 10px'}}/>
+                </div>
+                <div style={{maxHeight:220,overflowY:'auto'}}>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:0,fontSize:11,fontWeight:700,color:'var(--color-text-tertiary)',padding:'4px 12px',borderBottom:'1px solid var(--color-border)',background:'var(--color-bg-secondary)'}}>
+                    <span>ITEM</span><span style={{textAlign:'right',paddingRight:12}}>SFOT</span><span style={{textAlign:'right'}}>HHA</span>
+                  </div>
+                  {spreadsheet.filter(r=>!sheetSearch||r.item.toLowerCase().includes(sheetSearch.toLowerCase())).map((row,i)=>(
+                    <button key={i} onClick={()=>{setForm(f=>({...f,sfotPar:String(row.sfotPar),hhaPar:String(row.hhaPar),name:f.name||row.item}));setSpreadsheetMatch(row.item);setShowSheet(false);}} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:0,width:'100%',padding:'8px 12px',background:'none',border:'none',borderBottom:'1px solid var(--color-border)',cursor:'pointer',fontFamily:'var(--font)',textAlign:'left',fontSize:12,color:'var(--color-text)'}}>
+                      <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',paddingRight:8,color:'var(--color-text)'}}>{row.item}</span>
+                      <span style={{fontWeight:700,color:'var(--color-success-text)',textAlign:'right',paddingRight:12}}>{row.sfotPar||'—'}</span>
+                      <span style={{fontWeight:700,color:'var(--color-warning-text)',textAlign:'right'}}>{row.hhaPar||'—'}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         <div style={{display:'flex',gap:14,marginBottom:16,alignItems:'center'}}>
           <div onClick={()=>fileRef.current?.click()} style={{width:64,height:64,borderRadius:12,overflow:'hidden',background:'var(--color-bg-secondary)',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',flexShrink:0,border:'2px dashed var(--color-border)'}}>
             {photo?<img src={`data:image/jpeg;base64,${photo}`} alt="" style={{width:64,height:64,objectFit:'cover'}}/>:<span style={{fontSize:28}}>📷</span>}
@@ -2071,7 +2105,12 @@ function ReviewPendingItemView({ pendingId, pending, library, stock, locations, 
   const [sheetSearch,setSheetSearch]=useState('');
   const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
 
-  if(!item)return null;
+  if(!item)return(
+    <div style={{paddingBottom:20}}>
+      <TopBar title="Review Upload" onBack={()=>navigate('pendingqueue')}/>
+      <div style={{padding:'40px 20px',textAlign:'center',color:'var(--color-text-secondary)',fontSize:14}}>Item not found. <button onClick={()=>navigate('pendingqueue')} style={{background:'none',border:'none',color:'var(--color-text)',textDecoration:'underline',cursor:'pointer',fontFamily:'var(--font)',fontSize:14}}>Back to queue</button></div>
+    </div>
+  );
 
   async function aiFill(){
     setFilling(true);setFillError(null);setSpreadsheetMatch(null);
@@ -2086,12 +2125,16 @@ function ReviewPendingItemView({ pendingId, pending, library, stock, locations, 
 
   async function handleSave(){
     setSaving(true);
-    const newId=uid();
-    const newItem={id:newId,...form,profilePhoto:item.photos?.[0]||null,sfotPar:parseInt(form.sfotPar)||0,hhaPar:parseInt(form.hhaPar)||0,addedAt:new Date().toISOString()};
-    await onSaveLibrary([newItem,...library]);
-    await onSavePendingItem({...item,status:'complete'});
+    try {
+      const newId=uid();
+      const newItem={id:newId,...form,profilePhoto:item.photos?.[0]||null,sfotPar:parseInt(form.sfotPar)||0,hhaPar:parseInt(form.hhaPar)||0,addedAt:new Date().toISOString()};
+      await onSaveLibrary([newItem,...library]);
+      await onSavePendingItem({...item,status:'complete'});
+      setAddStockPrompt(newId);
+    } catch(e) {
+      alert('Save failed — '+(e.message||'check connection and try again'));
+    }
     setSaving(false);
-    setAddStockPrompt(newId);
   }
 
   return(
