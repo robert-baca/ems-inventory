@@ -1907,8 +1907,10 @@ function QuickUploadView({ navigate, onSavePendingItem, prePhoto }) {
   async function submit(){
     if(photos.length===0)return;
     setSubmitting(true);setErr(null);
-    const item={id:uid(),photos,notes:notes.trim(),status:'pending',submittedAt:new Date().toISOString()};
     try{
+      // Resize photos before saving to Redis to stay under the 1MB per-value limit
+      const storedPhotos=await Promise.all(photos.map(p=>resizeImage(p,600)));
+      const item={id:uid(),photos:storedPhotos,notes:notes.trim(),status:'pending',submittedAt:new Date().toISOString()};
       await onSavePendingItem(item);
       setPhotos([]);setNotes('');
       setToast(true);setTimeout(()=>setToast(false),1800);
