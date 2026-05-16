@@ -142,8 +142,8 @@ const btnS = { padding: '12px 20px', background: 'var(--color-bg-secondary)', co
 const btnG = { padding: '12px 20px', background: '#1d6b3a', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontWeight: 600, fontSize: 14, fontFamily: 'var(--font)' };
 
 const api = {
-  get:           e      => fetch(`/api/${e}`).then(r => r.json()),
-  post:          (e, d) => fetch(`/api/${e}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }).then(r => r.json()),
+  get:           e      => fetch(`/api/${e}`).then(r => r.json()).then(d => { if (d?.error) throw new Error(d.error); return d; }),
+  post:          (e, d) => fetch(`/api/${e}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }).then(r => r.json()).then(d => { if (d?.error) throw new Error(d.error); return d; }),
   getLibrary:    ()     => api.get('library'),
   saveLibrary:   data   => api.post('library', data),
   getStock:      ()     => api.get('stock'),
@@ -2359,9 +2359,20 @@ export default function App() {
   function navigate(view,params={}){if(view===-1){setNavStack(prev=>prev.length>1?prev.slice(0,-1):prev);return;}window.history.pushState({idx:navStack.length},'');setNavStack(prev=>[...prev,{view,params}]);}
 
   useEffect(()=>{
-    Promise.all([api.getLibrary(),api.getStock(),api.getLocations(),api.getCategories(),api.getTemplates(),api.getMap(),api.getPending(),api.getSpreadsheet()])
-      .then(([lib,stk,locs,cats,tmpls,map,pend,sheet])=>{setLibrary(Array.isArray(lib)?lib:[]);setStock(Array.isArray(stk)?stk:[]);setLocations(Array.isArray(locs)&&locs.length?locs:DEFAULT_LOCATIONS);setCategories(Array.isArray(cats)&&cats.length?cats:DEFAULT_CATEGORIES);setTemplates(Array.isArray(tmpls)?tmpls:[]);setMapData(map&&!Array.isArray(map)&&typeof map==='object'&&'rooms'in map?map:{rooms:[],pins:[],lines:[],doors:[],bgImage:null});setPending(Array.isArray(pend)?pend:[]);setSpreadsheet(Array.isArray(sheet)?sheet:[]);setLoading(false);})
-      .catch(()=>{setLocations(DEFAULT_LOCATIONS);setCategories(DEFAULT_CATEGORIES);setLoading(false);});
+    Promise.allSettled([api.getLibrary(),api.getStock(),api.getLocations(),api.getCategories(),api.getTemplates(),api.getMap(),api.getPending(),api.getSpreadsheet()])
+      .then(([libR,stkR,locsR,catsR,tmplsR,mapR,pendR,sheetR])=>{
+        const v=r=>r.status==='fulfilled'?r.value:null;
+        const lib=v(libR),stk=v(stkR),locs=v(locsR),cats=v(catsR),tmpls=v(tmplsR),map=v(mapR),pend=v(pendR),sheet=v(sheetR);
+        if(Array.isArray(lib))setLibrary(lib);
+        if(Array.isArray(stk))setStock(stk);
+        setLocations(Array.isArray(locs)&&locs.length?locs:DEFAULT_LOCATIONS);
+        setCategories(Array.isArray(cats)&&cats.length?cats:DEFAULT_CATEGORIES);
+        if(Array.isArray(tmpls))setTemplates(tmpls);
+        if(map&&!Array.isArray(map)&&typeof map==='object'&&'rooms'in map)setMapData(map);
+        if(Array.isArray(pend))setPending(pend);
+        if(Array.isArray(sheet))setSpreadsheet(sheet);
+        setLoading(false);
+      });
   },[]);
 
   async function persist(setter,data,saveFn){setter(data);setSaveStatus('Saving...');try{await saveFn(data);setSaveStatus('Saved ✓');setTimeout(()=>setSaveStatus(''),2000);}catch{setSaveStatus('Save failed');}}
@@ -2375,7 +2386,11 @@ export default function App() {
         const orig = library.find(c => c.id === item.id);
         return !orig || JSON.stringify(orig) !== JSON.stringify(item);
       });
-      const toDelete = library.filter(item => !newData.find(n => n.id === item.id));
+      // Only compute deletes when newData is smaller (explicit remove operation).
+      // If newData is same size or larger, we're adding/updating — skip deletes to prevent accidental mass-deletes.
+      const toDelete = newData.length < library.length
+        ? library.filter(item => !newData.find(n => n.id === item.id))
+        : [];
       for (const item of toUpsert) await api.post('library', { item });
       for (const item of toDelete) await api.post('library', { deleteId: item.id });
       const fresh = await api.getLibrary();
@@ -2420,12 +2435,10 @@ export default function App() {
   // Poll for remote changes every 30 s so concurrent users stay in sync
   useEffect(()=>{
     const id=setInterval(async()=>{
-      try{
-        const[lib,stk,pend]=await Promise.all([api.getLibrary(),api.getStock(),api.getPending()]);
-        if(Array.isArray(lib))setLibrary(lib);
-        if(Array.isArray(stk))setStock(stk);
-        if(Array.isArray(pend))setPending(pend);
-      }catch{}
+      const[libR,stkR,pendR]=await Promise.allSettled([api.getLibrary(),api.getStock(),api.getPending()]);
+      if(libR.status==='fulfilled'&&Array.isArray(libR.value))setLibrary(libR.value);
+      if(stkR.status==='fulfilled'&&Array.isArray(stkR.value))setStock(stkR.value);
+      if(pendR.status==='fulfilled'&&Array.isArray(pendR.value))setPending(pendR.value);
     },30000);
     return()=>clearInterval(id);
   },[]);
